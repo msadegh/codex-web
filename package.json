@@ -1,0 +1,44 @@
+{
+  "name": "codex-web",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "An unofficial, localhost-only browser interface for the Codex CLI.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/msadegh/codex-web.git"
+  },
+  "homepage": "https://github.com/msadegh/codex-web#readme",
+  "bugs": {
+    "url": "https://github.com/msadegh/codex-web/issues"
+  },
+  "bin": {
+    "codex-web": "./server.mjs"
+  },
+  "files": [
+    "public",
+    "server.mjs",
+    "README.md",
+    "README.fa.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "start": "node server.mjs",
+    "start:no-open": "node server.mjs --no-open",
+    "check": "node --check server.mjs && node --check public/app.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "codex",
+    "codex-cli",
+    "web-ui",
+    "rtl",
+    "persian"
+  ],
+  "author": "Mohammad Sadegh",
+  "license": "MIT"
+}

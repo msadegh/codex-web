@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="رابط وب لوکال برای Codex CLI با پشتیبانی درست از متن فارسی و انگلیسی"
+    />
+    <title>Codex Web</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="گفتگوها">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">C</div>
+          <div>
+            <strong>Codex Web</strong>
+            <span>روی همین دستگاه</span>
+          </div>
+          <button class="icon-button sidebar-close" id="sidebar-close" aria-label="بستن فهرست">×</button>
+        </div>
+
+        <button class="new-chat-button" id="new-chat">
+          <span aria-hidden="true">＋</span>
+          گفتگوی تازه
+        </button>
+
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="thread-search" type="search" placeholder="جستجو در گفتگوها…" autocomplete="off" />
+        </label>
+
+        <div class="thread-list" id="thread-list" aria-live="polite"></div>
+
+        <div class="sidebar-footer">
+          <div class="connection">
+            <span class="status-dot starting" id="status-dot"></span>
+            <span id="connection-label">در حال اتصال…</span>
+          </div>
+          <button class="icon-button" id="open-settings" aria-label="تنظیمات" title="تنظیمات">⚙</button>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <button class="icon-button menu-button" id="menu-button" aria-label="نمایش گفتگوها">☰</button>
+          <div class="thread-heading">
+            <h1 id="thread-title">گفتگوی تازه</h1>
+            <div class="thread-meta" id="thread-meta" dir="ltr"></div>
+          </div>
+          <div
+            class="message-navigation"
+            role="group"
+            aria-label="جابه‌جایی بین پیام‌های شما"
+          >
+            <button
+              class="icon-button message-navigation-button"
+              id="previous-user-message"
+              type="button"
+              aria-label="پیام قبلی من"
+              aria-controls="conversation"
+              title="پیام قبلی من"
+              disabled
+            >
+              ↑
+            </button>
+            <button
+              class="icon-button message-navigation-button"
+              id="next-user-message"
+              type="button"
+              aria-label="پیام بعدی من"
+              aria-controls="conversation"
+              title="پیام بعدی من"
+              disabled
+            >
+              ↓
+            </button>
+            <span
+              class="visually-hidden"
+              id="user-message-navigation-status"
+              aria-live="polite"
+            ></span>
+          </div>
+          <button class="text-button" id="header-settings">تنظیمات</button>
+        </header>
+
+        <section class="conversation" id="conversation" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <div class="welcome-mark">C</div>
+            <h2>چه کاری روی کد انجام دهیم؟</h2>
+            <p>
+              پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها،
+              MCPها و دسترسی‌های ترمینال شما.
+            </p>
+            <div class="suggestions">
+              <button data-prompt="ساختار این پروژه را بررسی کن و خلاصه‌ای از بخش‌های اصلی بده.">
+                بررسی ساختار پروژه
+              </button>
+              <button data-prompt="تغییرات git فعلی را review کن و مشکلات مهم را بگو.">
+                Review تغییرات فعلی
+              </button>
+              <button data-prompt="تست‌های پروژه را اجرا کن و اگر خطایی هست علتش را پیدا کن.">
+                بررسی تست‌ها
+              </button>
+            </div>
+          </div>
+          <div class="messages" id="messages"></div>
+        </section>
+
+        <div class="composer-wrap">
+          <button
+            class="scroll-bottom-button hidden"
+            id="scroll-bottom"
+            type="button"
+            aria-label="رفتن به آخر گفتگو"
+            aria-controls="conversation"
+            title="رفتن به آخر گفتگو"
+          >
+            <span aria-hidden="true">↓</span>
+          </button>
+          <div class="composer">
+            <input
+              class="image-input"
+              id="image-input"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/avif"
+              multiple
+              tabindex="-1"
+              aria-hidden="true"
+            />
+            <textarea
+              id="prompt"
+              rows="1"
+              dir="auto"
+              placeholder="پیام به Codex…"
+              aria-label="پیام به Codex"
+            ></textarea>
+            <div class="composer-footer">
+              <div class="composer-context">
+                <button class="context-chip" id="cwd-chip" title="تغییر پوشه کاری">
+                  <span aria-hidden="true">⌂</span>
+                  <bdi id="cwd-label">…</bdi>
+                </button>
+                <span class="context-chip passive" id="model-label">مدل پیش‌فرض</span>
+              </div>
+              <div class="composer-actions">
+                <span class="upload-status hidden" id="upload-status" aria-live="polite">
+                  در حال افزودن تصویر…
+                </span>
+                <button
+                  class="image-button"
+                  id="add-images"
+                  type="button"
+                  aria-label="افزودن تصویر"
+                  title="افزودن تصویر"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z" />
+                    <circle cx="9" cy="9" r="1.5" />
+                    <path d="m5 17 4.2-4.2a1.5 1.5 0 0 1 2.1 0l1.4 1.4 1.1-1.1a1.5 1.5 0 0 1 2.1 0L20 17.2" />
+                  </svg>
+                </button>
+                <button class="stop-button hidden" id="stop-turn" title="توقف پاسخ">■</button>
+                <button class="send-button" id="send-message" aria-label="ارسال" title="ارسال">
+                  ↑
+                </button>
+              </div>
+            </div>
+          </div>
+          <p class="composer-hint">Enter برای ارسال · Shift+Enter برای خط جدید</p>
+        </div>
+      </main>
+    </div>
+
+    <div class="mobile-scrim" id="mobile-scrim"></div>
+    <div class="toast-region" id="toasts" aria-live="assertive"></div>
+
+    <dialog class="settings-dialog" id="settings-dialog">
+      <form method="dialog" id="settings-form">
+        <div class="dialog-header">
+          <div>
+            <h2>تنظیمات گفتگو</h2>
+            <p>این گزینه‌ها برای گفتگوهای تازه اعمال می‌شوند.</p>
+          </div>
+          <button class="icon-button" id="settings-close" type="button" aria-label="بستن">×</button>
+        </div>
+
+        <label class="field">
+          <span>پوشه کاری</span>
+          <input id="cwd-input" dir="ltr" spellcheck="false" autocomplete="off" />
+          <small>مسیر باید absolute و موجود باشد.</small>
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>مدل</span>
+            <select id="model-select">
+              <option value="">پیش‌فرض Codex</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Reasoning effort</span>
+            <select id="effort-select">
+              <option value="">پیش‌فرض مدل</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+              <option value="max">Max</option>
+              <option value="ultra">Ultra</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>دسترسی فایل‌ها</span>
+            <select id="sandbox-select">
+              <option value="">از فرمان CLI / profile</option>
+              <option value="workspace-write">خواندن و نوشتن در workspace</option>
+              <option value="read-only">فقط خواندن</option>
+              <option value="danger-full-access">دسترسی کامل سیستم</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>تأیید اجرای دستورات</span>
+            <select id="approval-select">
+              <option value="">از فرمان CLI / profile</option>
+              <option value="on-request">در صورت نیاز سؤال کن</option>
+              <option value="untrusted">دستورات ناشناخته را سؤال کن</option>
+              <option value="never">هیچ‌وقت سؤال نکن</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>لحن پاسخ</span>
+          <select id="personality-select">
+            <option value="">پیش‌فرض</option>
+            <option value="friendly">Friendly</option>
+            <option value="pragmatic">Pragmatic</option>
+            <option value="none">None</option>
+          </select>
+        </label>
+
+        <div class="warning-box" id="full-access-warning">
+          دسترسی کامل یعنی agent می‌تواند خارج از workspace هم فایل‌ها و فرمان‌های سیستم را تغییر دهد.
+        </div>
+
+        <div class="dialog-actions">
+          <button class="secondary-button" id="settings-cancel" type="button">انصراف</button>
+          <button class="primary-button" type="submit" id="save-settings">ذخیره</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="approval-dialog" id="approval-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow" id="approval-context">درخواست Codex</span>
+          <h2 id="approval-title">تأیید لازم است</h2>
+        </div>
+      </div>
+      <p class="approval-reason" id="approval-reason" dir="auto"></p>
+      <div class="approval-detail" id="approval-detail"></div>
+      <div class="dialog-actions approval-actions">
+        <button class="secondary-button" id="approval-later" type="button">بعداً</button>
+        <button class="danger-button" id="approval-cancel" type="button">رد و توقف</button>
+        <button class="secondary-button" id="approval-decline" type="button">رد</button>
+        <button class="secondary-button" id="approval-session" type="button">تأیید برای این session</button>
+        <button class="primary-button" id="approval-accept" type="button">تأیید</button>
+      </div>
+    </dialog>
+
+    <dialog class="input-dialog" id="input-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow" id="input-context">سؤال Codex</span>
+          <h2>برای ادامه پاسخ دهید</h2>
+        </div>
+      </div>
+      <form id="input-request-form">
+        <div id="input-questions"></div>
+        <div class="dialog-actions">
+          <button class="secondary-button" id="input-later" type="button">بعداً</button>
+          <button class="danger-button hidden" id="input-cancel" type="button">رد و توقف</button>
+          <button class="secondary-button hidden" id="input-decline" type="button">رد</button>
+          <button class="primary-button" id="input-submit" type="submit">ارسال پاسخ</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
