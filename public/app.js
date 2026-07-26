@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const BASE_DOCUMENT_TITLE = "Codex Web";
 const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
+const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
 const IMAGE_EXTENSIONS = {
@@ -11,6 +12,144 @@ const IMAGE_EXTENSIONS = {
   "image/png": "png",
   "image/webp": "webp",
 };
+
+const SLASH_COMMANDS = [
+  {
+    name: "compact",
+    label: "فشرده‌سازی گفتگو",
+    description: "خلاصه‌کردن context فعلی و آزادکردن فضای گفتگو",
+  },
+  {
+    name: "new",
+    label: "گفتگوی تازه",
+    description: "شروع یک گفتگوی مستقل جدید",
+  },
+  {
+    name: "clear",
+    label: "پاک‌کردن و شروع دوباره",
+    description: "نام دیگر /new برای آغاز یک گفتگوی تازه",
+  },
+  {
+    name: "resume",
+    label: "ادامهٔ یک گفتگو",
+    description: "رفتن به فهرست گفتگوهای ذخیره‌شده",
+  },
+  {
+    name: "status",
+    label: "وضعیت گفتگو",
+    description: "نمایش شناسه، مدل، دسترسی و مصرف context",
+  },
+  {
+    name: "model",
+    label: "انتخاب مدل",
+    description: "بازکردن تنظیمات مدل گفتگوهای تازه",
+  },
+  {
+    name: "permissions",
+    label: "تنظیم دسترسی‌ها",
+    description: "بازکردن تنظیمات sandbox و approval",
+  },
+  {
+    name: "settings",
+    label: "تنظیمات",
+    description: "بازکردن همهٔ تنظیمات Codex Web",
+  },
+  {
+    name: "help",
+    label: "راهنمای فرمان‌ها",
+    description: "نمایش فهرست فرمان‌هایی که این رابط پشتیبانی می‌کند",
+  },
+].map((command) => ({ ...command, token: `/${command.name}` }));
+
+const COMMON_ABSOLUTE_PATH_ROOTS = new Set([
+  "Applications",
+  "Library",
+  "System",
+  "Users",
+  "Volumes",
+  "app",
+  "bin",
+  "boot",
+  "dev",
+  "etc",
+  "home",
+  "lib",
+  "lib64",
+  "media",
+  "mnt",
+  "nix",
+  "opt",
+  "private",
+  "proc",
+  "root",
+  "run",
+  "sbin",
+  "snap",
+  "srv",
+  "sys",
+  "tmp",
+  "usr",
+  "var",
+  "workspace",
+]);
+
+const KNOWN_CODEX_COMMAND_NAMES = new Set([
+  ...SLASH_COMMANDS.map((command) => command.name),
+  "agent",
+  "app",
+  "apps",
+  "approve",
+  "archive",
+  "btw",
+  "clean",
+  "cloud",
+  "cloud-environment",
+  "copy",
+  "debug-config",
+  "delete",
+  "diff",
+  "exit",
+  "experimental",
+  "fast",
+  "feedback",
+  "fork",
+  "goal",
+  "hooks",
+  "ide",
+  "ide-context",
+  "import",
+  "init",
+  "keymap",
+  "local",
+  "logout",
+  "mcp",
+  "memories",
+  "mention",
+  "personality",
+  "pet",
+  "pets",
+  "plan",
+  "plugins",
+  "project",
+  "ps",
+  "quit",
+  "raw",
+  "reasoning",
+  "rename",
+  "review",
+  "sandbox-add-read-dir",
+  "setup-default-sandbox",
+  "side",
+  "skills",
+  "statusline",
+  "stop",
+  "subagents",
+  "theme",
+  "title",
+  "usage",
+  "vim",
+  "worktree",
+]);
 
 const elements = {
   addImages: $("#add-images"),
@@ -62,6 +201,10 @@ const elements = {
   settingsDialog: $("#settings-dialog"),
   settingsForm: $("#settings-form"),
   sidebarClose: $("#sidebar-close"),
+  slashCommandEmpty: $("#slash-command-empty"),
+  slashCommandMenu: $("#slash-command-menu"),
+  slashCommandOptions: $("#slash-command-options"),
+  slashCommandStatus: $("#slash-command-status"),
   statusDot: $("#status-dot"),
   stopTurn: $("#stop-turn"),
   threadList: $("#thread-list"),
@@ -89,6 +232,7 @@ const state = {
   activeInteractionKey: null,
   busy: false,
   completedTurns: new Set(),
+  compactPendingThreads: new Set(),
   connected: false,
   currentThread: null,
   currentThreadId: null,
@@ -102,6 +246,7 @@ const state = {
   navigating: false,
   newDraftId: crypto.randomUUID(),
   notifiedTurns: new Set(),
+  optimisticUserMessages: new Map(),
   pendingInteractions: new Map(),
   postponedInteractions: new Set(),
   forceNextScroll: false,
@@ -110,8 +255,14 @@ const state = {
   scrollFrame: null,
   scrollingToBottom: false,
   settings: loadSettings(),
+  slashActiveIndex: 0,
+  slashCommandExecuting: false,
+  slashDismissedValue: null,
+  slashFilteredCommands: [],
   threadActivity: new Map(),
   threadEventBacklog: new Map(),
+  threadRuntime: new Map(),
+  threadTokenUsage: new Map(),
   threads: [],
   threadsRefreshVersion: 0,
   userMessageHighlightTimer: null,
@@ -333,6 +484,409 @@ function showError(error, context = "") {
   toast(`${context ? `${context}: ` : ""}${detail}`, "error");
 }
 
+function slashCommandByName(name) {
+  return SLASH_COMMANDS.find((command) => command.name === name) || null;
+}
+
+function parseSlashCommand(text) {
+  const raw = String(text || "");
+  const candidate = raw.trimStart();
+  if (!candidate.startsWith("/")) return null;
+  const token = candidate.match(/^\/\S*/)?.[0] || "/";
+  const singlePathPart = token.slice(1);
+  const commandNameMatch = singlePathPart.match(/^([a-z][a-z0-9-]*)$/i);
+  const knownCodexCommand = Boolean(
+    commandNameMatch && KNOWN_CODEX_COMMAND_NAMES.has(commandNameMatch[1].toLowerCase()),
+  );
+  const pathLike =
+    !knownCodexCommand &&
+    (token.slice(1).includes("/") ||
+      token.includes("\\") ||
+      /^\/[^/\\\s]*\.[^/\\\s]+$/.test(token) ||
+      COMMON_ABSOLUTE_PATH_ROOTS.has(singlePathPart) ||
+      /^[A-Z][A-Za-z0-9._-]*$/.test(singlePathPart));
+  if (pathLike) return null;
+  const match = token.match(/^\/([a-z][a-z0-9-]*)$/i);
+  return {
+    arguments: candidate.slice(token.length).trim(),
+    command: match ? slashCommandByName(match[1].toLowerCase()) : null,
+    multiline: /[\r\n]/.test(raw),
+    token,
+  };
+}
+
+function slashCommandAvailability(command) {
+  if (state.navigating) return { available: false, reason: "تا پایان بازشدن گفتگو صبر کنید." };
+  if (state.slashCommandExecuting && command.name === "compact") {
+    return { available: false, reason: "یک فرمان دیگر در حال اجراست." };
+  }
+  if (command.name === "compact") {
+    if (!state.connected) return { available: false, reason: "Codex هنوز متصل نیست." };
+    if (!state.currentThreadId) {
+      return { available: false, reason: "ابتدا یک گفتگو را شروع یا باز کنید." };
+    }
+    if (state.busy || state.compactPendingThreads.has(state.currentThreadId)) {
+      return { available: false, reason: "پس از پایان کار فعلی دوباره امتحان کنید." };
+    }
+    if (imageUploadsForDraft() > 0) {
+      return { available: false, reason: "تا پایان افزودن تصویرها صبر کنید." };
+    }
+  }
+  if (
+    (command.name === "new" || command.name === "clear") &&
+    !state.currentThreadId &&
+    imageUploadsForDraft() > 0
+  ) {
+    return { available: false, reason: "تا پایان افزودن تصویرها صبر کنید." };
+  }
+  return { available: true, reason: "" };
+}
+
+function slashComposerQuery() {
+  const value = elements.prompt.value;
+  if (state.navigating || state.slashDismissedValue === value) return null;
+  if (!/^\/[a-z0-9-]*$/i.test(value)) return null;
+  const { start, end } = promptSelection();
+  if (start !== value.length || end !== value.length) return null;
+  return value.slice(1).toLowerCase();
+}
+
+function closeSlashCommandMenu(dismiss = false) {
+  if (dismiss) state.slashDismissedValue = elements.prompt.value;
+  state.slashFilteredCommands = [];
+  state.slashActiveIndex = 0;
+  elements.slashCommandMenu.classList.add("hidden");
+  elements.prompt.setAttribute("aria-expanded", "false");
+  elements.prompt.removeAttribute("aria-activedescendant");
+  elements.slashCommandStatus.textContent = "";
+}
+
+function updateSlashCommandMenu({ keepActiveCommand = true } = {}) {
+  const query = slashComposerQuery();
+  if (query === null) {
+    closeSlashCommandMenu();
+    return;
+  }
+
+  const previousActive = keepActiveCommand
+    ? state.slashFilteredCommands[state.slashActiveIndex]?.name
+    : null;
+  state.slashFilteredCommands = SLASH_COMMANDS.filter((command) =>
+    command.name.includes(query),
+  );
+  const previousIndex = previousActive
+    ? state.slashFilteredCommands.findIndex((command) => command.name === previousActive)
+    : -1;
+  state.slashActiveIndex =
+    previousIndex >= 0
+      ? previousIndex
+      : Math.min(state.slashActiveIndex, Math.max(0, state.slashFilteredCommands.length - 1));
+
+  elements.slashCommandOptions.replaceChildren();
+  state.slashFilteredCommands.forEach((command, index) => {
+    const availability = slashCommandAvailability(command);
+    const option = document.createElement("button");
+    option.type = "button";
+    option.id = `slash-command-${command.name}`;
+    option.className = `slash-command-option${index === state.slashActiveIndex ? " active" : ""}`;
+    option.dataset.slashCommand = command.name;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(index === state.slashActiveIndex));
+    option.setAttribute("aria-disabled", String(!availability.available));
+
+    const name = document.createElement("bdi");
+    name.className = "slash-command-name";
+    name.dir = "ltr";
+    name.textContent = command.token;
+    const copy = document.createElement("span");
+    copy.className = "slash-command-copy";
+    const label = document.createElement("strong");
+    label.textContent = command.label;
+    const description = document.createElement("small");
+    description.textContent = availability.available
+      ? command.description
+      : `${command.description} — ${availability.reason}`;
+    copy.append(label, description);
+    option.append(name, copy);
+    elements.slashCommandOptions.append(option);
+  });
+
+  const hasCommands = state.slashFilteredCommands.length > 0;
+  elements.slashCommandEmpty.classList.toggle("hidden", hasCommands);
+  elements.slashCommandMenu.classList.remove("hidden");
+  elements.prompt.setAttribute("aria-expanded", "true");
+  if (hasCommands) {
+    const active = state.slashFilteredCommands[state.slashActiveIndex];
+    elements.prompt.setAttribute("aria-activedescendant", `slash-command-${active.name}`);
+  } else {
+    elements.prompt.removeAttribute("aria-activedescendant");
+  }
+  elements.slashCommandStatus.textContent = hasCommands
+    ? `${state.slashFilteredCommands.length.toLocaleString("fa-IR")} فرمان`
+    : "فرمانی پیدا نشد";
+}
+
+function moveSlashCommandSelection(direction) {
+  const count = state.slashFilteredCommands.length;
+  if (!count) return;
+  state.slashActiveIndex = (state.slashActiveIndex + direction + count) % count;
+  updateSlashCommandMenu({ keepActiveCommand: false });
+  const active = elements.slashCommandOptions.querySelector(".slash-command-option.active");
+  active?.scrollIntoView?.({ block: "nearest" });
+}
+
+function replacePromptWithSlashCommand(command) {
+  elements.prompt.value = command.token;
+  elements.prompt.setSelectionRange(command.token.length, command.token.length);
+  state.slashDismissedValue = null;
+  saveCurrentDraft();
+  resizePrompt();
+  updateSlashCommandMenu({ keepActiveCommand: false });
+}
+
+async function activateHighlightedSlashCommand() {
+  const command = state.slashFilteredCommands[state.slashActiveIndex];
+  if (!command || elements.slashCommandMenu.classList.contains("hidden")) return false;
+  replacePromptWithSlashCommand(command);
+  await executeSlashCommand(command);
+  return true;
+}
+
+function clearSlashCommandText(expectedToken, targetDraftKey = draftKey()) {
+  const stored = state.drafts.get(targetDraftKey);
+  if (typeof stored === "string" && stored.trim().toLowerCase() === expectedToken.toLowerCase()) {
+    state.drafts.set(targetDraftKey, "");
+  }
+  if (draftKey() !== targetDraftKey) return;
+  if (elements.prompt.value.trim().toLowerCase() !== expectedToken.toLowerCase()) return;
+  elements.prompt.value = "";
+  state.drafts.set(targetDraftKey, "");
+  resizePrompt();
+  state.slashDismissedValue = null;
+  closeSlashCommandMenu();
+}
+
+function renderLocalCommandCard(title) {
+  const card = document.createElement("section");
+  card.className = "local-command-card";
+  card.setAttribute("aria-label", title);
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  card.append(heading);
+  elements.messages.append(card);
+  elements.welcome.classList.add("hidden");
+  scheduleScrollToBottom();
+  return card;
+}
+
+function readableSandbox(value) {
+  if (!value) return "پیش‌فرض Codex";
+  if (typeof value === "string") return value;
+  const names = {
+    dangerFullAccess: "دسترسی کامل",
+    externalSandbox: "sandbox خارجی",
+    readOnly: "فقط خواندن",
+    workspaceWrite: "خواندن و نوشتن در workspace",
+  };
+  return names[value.type] || value.type || "نامشخص";
+}
+
+function readableApproval(value) {
+  if (!value) return "پیش‌فرض Codex";
+  if (typeof value === "string") return value;
+  return value.granular ? "granular" : "نامشخص";
+}
+
+function contextUsageText(usage) {
+  const total = usage?.total?.totalTokens;
+  const windowSize = usage?.modelContextWindow;
+  if (!Number.isFinite(total)) return "هنوز گزارش نشده";
+  const totalText = total.toLocaleString("fa-IR");
+  if (!Number.isFinite(windowSize) || windowSize <= 0) return `${totalText} توکن`;
+  const percent = Math.min(100, Math.max(0, (total / windowSize) * 100));
+  return `${totalText} از ${windowSize.toLocaleString("fa-IR")} توکن (${percent.toLocaleString(
+    "fa-IR",
+    { maximumFractionDigits: 1 },
+  )}٪)`;
+}
+
+function showSlashStatus() {
+  const threadId = state.currentThreadId;
+  const runtime = threadId ? state.threadRuntime.get(threadId) || {} : {};
+  const thread = state.currentThread;
+  const usage = threadId ? state.threadTokenUsage.get(threadId) : null;
+  const rows = [
+    ["اتصال", state.connected ? "متصل" : "قطع"],
+    ["وضعیت", state.busy ? "در حال اجرا" : threadId ? "آماده" : "گفتگوی تازه"],
+    ["شناسهٔ گفتگو", threadId || "هنوز ساخته نشده"],
+    ["پوشهٔ کاری", runtime.cwd || thread?.cwd || state.settings.cwd || "نامشخص"],
+    ["مدل", runtime.model || thread?.model || state.settings.model || "پیش‌فرض Codex"],
+    ["Sandbox", readableSandbox(runtime.sandbox || state.settings.sandbox)],
+    ["Approval", readableApproval(runtime.approvalPolicy || state.settings.approvalPolicy)],
+    ["Context", contextUsageText(usage)],
+  ];
+  const card = renderLocalCommandCard("وضعیت Codex");
+  const list = document.createElement("dl");
+  for (const [label, value] of rows) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    list.append(term, detail);
+  }
+  card.append(list);
+}
+
+function showSlashHelp() {
+  const card = renderLocalCommandCard("فرمان‌های پشتیبانی‌شده");
+  const list = document.createElement("ul");
+  list.className = "local-command-help";
+  for (const command of SLASH_COMMANDS) {
+    const item = document.createElement("li");
+    const token = document.createElement("code");
+    token.textContent = command.token;
+    const description = document.createElement("span");
+    description.textContent = command.description;
+    item.append(token, description);
+    list.append(item);
+  }
+  card.append(list);
+}
+
+async function runCompactSlashCommand(command) {
+  const threadId = state.currentThreadId;
+  const targetDraftKey = draftKey(threadId);
+  saveCurrentDraft();
+  state.slashCommandExecuting = true;
+  state.compactPendingThreads.add(threadId);
+  updateThreadActivity(threadId, {
+    phase: "running",
+    terminalPhase: null,
+    turnId: null,
+    unread: false,
+  });
+  if (state.currentThreadId === threadId) setBusy(true);
+  updateSlashCommandMenu();
+  updateComposerControls();
+
+  try {
+    await rpc("thread/compact/start", { threadId });
+    clearSlashCommandText(command.token, targetDraftKey);
+    toast("درخواست فشرده‌سازی گفتگو ثبت شد.", "success");
+  } catch (error) {
+    const requestHadNotStarted = state.compactPendingThreads.delete(threadId);
+    if (requestHadNotStarted) {
+      const activity = ensureThreadActivity(threadId);
+      activity.phase = "idle";
+      activity.terminalPhase = null;
+      activity.turnId = null;
+      activity.unread = false;
+      if (state.currentThreadId === threadId) setBusy(false);
+      renderThreadList();
+      updateAttentionUi();
+    } else {
+      clearSlashCommandText(command.token, targetDraftKey);
+      toast(
+        "Codex فشرده‌سازی را شروع کرده است، اما پاسخ تأیید آن به رابط نرسید.",
+        "warning",
+        { duration: 7000 },
+      );
+      return;
+    }
+    const unsupported =
+      error.details?.code === -32601 ||
+      /method not found|does not provide|not supported/i.test(error.message || "");
+    if (unsupported) {
+      toast(
+        "این نسخهٔ Codex از فشرده‌سازی بومی پشتیبانی نمی‌کند؛ Codex CLI را به‌روز کنید.",
+        "error",
+        { duration: 7000 },
+      );
+    } else {
+      showError(error, "فشرده‌سازی گفتگو");
+    }
+  } finally {
+    state.slashCommandExecuting = false;
+    updateSlashCommandMenu();
+    updateComposerControls();
+  }
+}
+
+async function executeSlashCommand(command) {
+  const availability = slashCommandAvailability(command);
+  if (!availability.available) {
+    toast(availability.reason, "warning");
+    updateSlashCommandMenu();
+    return;
+  }
+
+  const targetDraftKey = draftKey();
+  switch (command.name) {
+    case "compact":
+      await runCompactSlashCommand(command);
+      return;
+    case "new":
+    case "clear":
+      clearSlashCommandText(command.token, targetDraftKey);
+      newChat();
+      return;
+    case "resume":
+      clearSlashCommandText(command.token, targetDraftKey);
+      openSidebar();
+      setTimeout(() => {
+        elements.threadSearch.focus();
+        elements.threadSearch.select();
+      }, 0);
+      return;
+    case "status":
+      clearSlashCommandText(command.token, targetDraftKey);
+      showSlashStatus();
+      return;
+    case "model":
+      clearSlashCommandText(command.token, targetDraftKey);
+      openSettings();
+      setTimeout(() => elements.modelSelect.focus(), 0);
+      return;
+    case "permissions":
+      clearSlashCommandText(command.token, targetDraftKey);
+      openSettings();
+      setTimeout(() => elements.sandboxSelect.focus(), 0);
+      return;
+    case "settings":
+      clearSlashCommandText(command.token, targetDraftKey);
+      openSettings();
+      return;
+    case "help":
+      clearSlashCommandText(command.token, targetDraftKey);
+      showSlashHelp();
+      return;
+  }
+}
+
+async function handleSlashCommand(text) {
+  const parsed = parseSlashCommand(text);
+  if (!parsed) return false;
+  if (!parsed.command) {
+    toast(
+      `فرمان ${parsed.token} در Codex Web پشتیبانی نمی‌شود؛ برای دیدن فهرست فقط / را تایپ کنید.`,
+      "warning",
+      { duration: 6500 },
+    );
+    updateSlashCommandMenu();
+    return true;
+  }
+  if (parsed.multiline) {
+    toast("فرمان اسلش باید به‌تنهایی در یک خط نوشته شود.", "warning");
+    return true;
+  }
+  if (parsed.arguments) {
+    toast(`${parsed.command.token} در این رابط آرگومان نمی‌پذیرد.`, "warning");
+    return true;
+  }
+  await executeSlashCommand(parsed.command);
+  return true;
+}
+
 function promptSelection() {
   const fallback = elements.prompt.value.length;
   return {
@@ -487,12 +1041,16 @@ function imageUploadsForDraft(key = draftKey()) {
 function updateComposerControls() {
   const uploadingImages = imageUploadsForDraft();
   const uploading = uploadingImages > 0;
-  elements.sendMessage.disabled =
-    !state.connected ||
-    state.busy ||
-    state.navigating ||
-    uploading ||
-    !elements.prompt.value.trim();
+  const text = elements.prompt.value.trim();
+  const slash = parseSlashCommand(elements.prompt.value);
+  const slashCanRun =
+    slash &&
+    (slash.command
+      ? slashCommandAvailability(slash.command).available
+      : !state.navigating && !state.slashCommandExecuting);
+  elements.sendMessage.disabled = slash
+    ? !slashCanRun
+    : !state.connected || state.busy || state.navigating || uploading || !text;
   elements.addImages.disabled = state.navigating || uploading;
   elements.imageInput.disabled = state.navigating || uploading;
   elements.uploadStatus.textContent =
@@ -500,6 +1058,7 @@ function updateComposerControls() {
       ? `در حال افزودن ${uploadingImages.toLocaleString("fa-IR")} تصویر…`
       : "در حال افزودن تصویر…";
   elements.uploadStatus.classList.toggle("hidden", !uploading);
+  updateSlashCommandMenu();
 }
 
 function updateConnection(ready, message = "") {
@@ -518,6 +1077,7 @@ function setBusy(busy, turnId = null) {
 
 function setNavigating(navigating) {
   state.navigating = navigating;
+  if (navigating) closeSlashCommandMenu();
   elements.prompt.disabled = navigating;
   updateComposerControls();
   resizePrompt();
@@ -911,6 +1471,7 @@ async function refreshThreads(searchTerm = elements.threadSearch.value.trim()) {
 }
 
 function clearConversation() {
+  closeSlashCommandMenu();
   resetScrollFollowing();
   if (state.userMessageNavigationFrame !== null) {
     cancelAnimationFrame(state.userMessageNavigationFrame);
@@ -935,6 +1496,7 @@ function saveCurrentDraft() {
 
 function restoreDraft(threadId = state.currentThreadId) {
   elements.prompt.value = state.drafts.get(draftKey(threadId)) || "";
+  state.slashDismissedValue = null;
   resizePrompt();
 }
 
@@ -967,6 +1529,13 @@ function setCurrentThread(thread, metadata = {}) {
   if (state.currentThreadId !== thread.id) closeInteractionDialogs();
   state.currentThread = thread;
   state.currentThreadId = thread.id;
+  const runtime = { ...(state.threadRuntime.get(thread.id) || {}) };
+  if (metadata.approvalPolicy !== undefined) runtime.approvalPolicy = metadata.approvalPolicy;
+  if (metadata.reasoningEffort !== undefined) runtime.reasoningEffort = metadata.reasoningEffort;
+  if (metadata.sandbox !== undefined) runtime.sandbox = metadata.sandbox;
+  if (metadata.cwd || thread.cwd) runtime.cwd = metadata.cwd || thread.cwd;
+  if (metadata.model || thread.model) runtime.model = metadata.model || thread.model;
+  state.threadRuntime.set(thread.id, runtime);
   syncThreadActivity(thread);
   markThreadSeen(thread.id);
   elements.threadTitle.textContent = threadDisplayTitle(thread);
@@ -1051,7 +1620,12 @@ function createActivityView(item) {
   const summary = document.createElement("summary");
   summary.textContent = activityTitle(item);
   summary.addEventListener("click", (event) => {
-    if (details.classList.contains("reasoning-status")) event.preventDefault();
+    if (
+      details.classList.contains("reasoning-status") ||
+      details.classList.contains("compaction-status")
+    ) {
+      event.preventDefault();
+    }
   });
   const content = document.createElement("div");
   content.className = "activity-content";
@@ -1153,9 +1727,28 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
   );
 }
 
+function updateCompaction(view, phase) {
+  const running = phase !== "completed";
+  view.element.classList.add("compaction-status");
+  view.element.classList.toggle("running", running);
+  view.element.classList.toggle("completed", !running);
+  view.element.open = false;
+  view.element.setAttribute("aria-busy", String(running));
+  view.summary.setAttribute("aria-disabled", "true");
+  view.summary.textContent = running
+    ? "در حال فشرده‌سازی زمینهٔ گفتگو…"
+    : "زمینهٔ گفتگو فشرده شد";
+  view.content.hidden = true;
+  view.content.replaceChildren();
+}
+
 function updateActivity(view, item, phase) {
   if (item.type === "reasoning") {
     updateReasoning(view, item, phase);
+    return;
+  }
+  if (item.type === "contextCompaction") {
+    updateCompaction(view, phase);
     return;
   }
 
@@ -1202,9 +1795,39 @@ function updateActivity(view, item, phase) {
   );
 }
 
+function reconcileOptimisticUserMessage(item, existingView) {
+  const optimistic = state.optimisticUserMessages.get(item.clientId);
+  if (!optimistic) return existingView;
+  optimistic.accepted = true;
+  if (optimistic.rpcSettled) {
+    state.optimisticUserMessages.delete(item.clientId);
+  }
+
+  const optimisticId = optimistic.itemId;
+  const optimisticView = state.itemViews.get(optimisticId);
+  if (!optimisticView) return existingView;
+  state.itemViews.delete(optimisticId);
+  if (state.userNavigationItemId === optimisticId) {
+    state.userNavigationItemId = item.id;
+  }
+
+  if (existingView && existingView !== optimisticView) {
+    optimisticView.element.remove();
+    scheduleUserMessageNavigationUpdate();
+    return existingView;
+  }
+
+  optimisticView.element.dataset.itemId = item.id;
+  state.itemViews.set(item.id, optimisticView);
+  return optimisticView;
+}
+
 function renderItem(item, phase = "completed") {
   if (!item?.id || !item.type) return null;
   let view = state.itemViews.get(item.id);
+  if (item.type === "userMessage" && item.clientId) {
+    view = reconcileOptimisticUserMessage(item, view);
+  }
   const isMessage = item.type === "userMessage" || item.type === "agentMessage";
   if (!view) {
     view = isMessage ? createMessageView(item) : createActivityView(item);
@@ -1220,6 +1843,66 @@ function renderItem(item, phase = "completed") {
   }
   scheduleScrollToBottom();
   return view;
+}
+
+function renderOptimisticUserMessage(clientId, input) {
+  const item = {
+    clientId,
+    content: input,
+    id: `${OPTIMISTIC_USER_MESSAGE_PREFIX}:${clientId}`,
+    type: "userMessage",
+  };
+  const view = renderItem(item, "completed");
+  if (!view) return;
+  state.optimisticUserMessages.set(clientId, {
+    accepted: false,
+    itemId: item.id,
+    rpcSettled: false,
+  });
+  elements.welcome.classList.add("hidden");
+}
+
+function settleOptimisticUserMessage(clientId) {
+  const optimistic = state.optimisticUserMessages.get(clientId);
+  if (!optimistic) return;
+  optimistic.rpcSettled = true;
+  if (optimistic.accepted) {
+    state.optimisticUserMessages.delete(clientId);
+  }
+}
+
+function acceptBackgroundOptimisticUserMessage(clientId) {
+  const optimistic = state.optimisticUserMessages.get(clientId);
+  if (!optimistic) return;
+  optimistic.accepted = true;
+  if (optimistic.rpcSettled) {
+    state.optimisticUserMessages.delete(clientId);
+  }
+}
+
+function rollbackOptimisticUserMessage(clientId) {
+  const optimistic = state.optimisticUserMessages.get(clientId);
+  state.optimisticUserMessages.delete(clientId);
+  if (optimistic?.accepted) return false;
+  if (!optimistic) return true;
+
+  const optimisticId = optimistic.itemId;
+  const view = state.itemViews.get(optimisticId);
+  if (view) {
+    state.itemViews.delete(optimisticId);
+    view.element.remove();
+    if (state.userNavigationItemId === optimisticId) {
+      state.userNavigationItemId = null;
+      elements.userMessageNavigationStatus.textContent = "";
+    }
+    elements.welcome.classList.toggle(
+      "hidden",
+      elements.messages.childElementCount > 0,
+    );
+    scheduleUserMessageNavigationUpdate();
+    updateScrollButton();
+  }
+  return true;
 }
 
 function renderHistory(thread) {
@@ -1602,7 +2285,12 @@ function turnEventKey(threadId, turnId) {
   return `${threadId}:${turnId}`;
 }
 
-async function sendPrompt(text = elements.prompt.value.trim()) {
+async function sendPrompt(text = elements.prompt.value) {
+  if (parseSlashCommand(text)) {
+    await handleSlashCommand(text);
+    return;
+  }
+  text = text.trim();
   if (
     !text ||
     !state.connected ||
@@ -1616,9 +2304,12 @@ async function sendPrompt(text = elements.prompt.value.trim()) {
   const sourceDraftKey = draftKey(sourceThreadId);
   const navigationVersion = state.navigationVersion;
   let targetThreadId = sourceThreadId;
+  const clientUserMessageId = crypto.randomUUID();
+  const input = [{ type: "text", text }];
   elements.prompt.value = "";
   state.drafts.set(sourceDraftKey, "");
   resizePrompt();
+  renderOptimisticUserMessage(clientUserMessageId, input);
   scrollToBottom(true, true);
   setBusy(true);
   if (sourceThreadId) {
@@ -1637,12 +2328,13 @@ async function sendPrompt(text = elements.prompt.value.trim()) {
     );
     targetThreadId = threadId;
     const params = {
-      clientUserMessageId: crypto.randomUUID(),
-      input: [{ type: "text", text }],
+      clientUserMessageId,
+      input,
       threadId,
     };
     if (state.settings.effort) params.effort = state.settings.effort;
     const result = await rpc("turn/start", params);
+    settleOptimisticUserMessage(clientUserMessageId);
     const completedBeforeResponse = state.completedTurns.has(
       turnEventKey(threadId, result.turn.id),
     );
@@ -1661,26 +2353,29 @@ async function sendPrompt(text = elements.prompt.value.trim()) {
       setBusy(false);
     }
   } catch (error) {
-    const restoreThreadId = targetThreadId || sourceThreadId;
-    const restoreKey = restoreThreadId ? draftKey(restoreThreadId) : sourceDraftKey;
-    const newerDraft = state.drafts.get(restoreKey) || "";
-    state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
-    if (restoreThreadId) {
-      const activity = ensureThreadActivity(restoreThreadId);
-      if (activity.phase === "running" && !activity.turnId) {
-        activity.phase = "idle";
-        activity.terminalPhase = null;
-        activity.unread = false;
-        renderThreadList();
-        updateAttentionUi();
+    const shouldRollback = rollbackOptimisticUserMessage(clientUserMessageId);
+    if (shouldRollback) {
+      const restoreThreadId = targetThreadId || sourceThreadId;
+      const restoreKey = restoreThreadId ? draftKey(restoreThreadId) : sourceDraftKey;
+      const newerDraft = state.drafts.get(restoreKey) || "";
+      state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
+      if (restoreThreadId) {
+        const activity = ensureThreadActivity(restoreThreadId);
+        if (activity.phase === "running" && !activity.turnId) {
+          activity.phase = "idle";
+          activity.terminalPhase = null;
+          activity.unread = false;
+          renderThreadList();
+          updateAttentionUi();
+        }
       }
-    }
-    if (
-      state.currentThreadId === restoreThreadId ||
-      (!restoreThreadId && draftKey() === sourceDraftKey)
-    ) {
-      setBusy(false);
-      restoreDraft(restoreThreadId);
+      if (
+        state.currentThreadId === restoreThreadId ||
+        (!restoreThreadId && draftKey() === sourceDraftKey)
+      ) {
+        setBusy(false);
+        restoreDraft(restoreThreadId);
+      }
     }
     showError(error, "ارسال پیام");
   }
@@ -1818,6 +2513,28 @@ function handleNotification(message) {
     return;
   }
 
+  if (method === "thread/tokenUsage/updated" && threadId) {
+    state.threadTokenUsage.set(threadId, params.tokenUsage || null);
+    return;
+  }
+
+  if (
+    threadId &&
+    (method === "item/started" || method === "item/completed") &&
+    params.item?.type === "contextCompaction"
+  ) {
+    state.compactPendingThreads.delete(threadId);
+    if (method === "item/started") {
+      updateThreadActivity(threadId, {
+        phase: "running",
+        terminalPhase: null,
+        turnId: params.turnId || null,
+        unread: false,
+      });
+      if (threadId === state.currentThreadId) setBusy(true, params.turnId || null);
+    }
+  }
+
   if (method === "thread/name/updated") {
     const threadName = params.threadName || params.name;
     const thread = threadById(threadId);
@@ -1858,6 +2575,7 @@ function handleNotification(message) {
 
   if (method === "turn/started" && threadId) {
     const turnId = params.turn?.id || null;
+    state.compactPendingThreads.delete(threadId);
     updateThreadActivity(threadId, {
       phase: hasPendingInteractionForThread(threadId) ? "needs-input" : "running",
       terminalPhase: null,
@@ -1875,6 +2593,7 @@ function handleNotification(message) {
     const turn = params.turn || {};
     const turnId = turn.id || "unknown";
     const key = turnEventKey(threadId, turnId);
+    state.compactPendingThreads.delete(threadId);
     state.completedTurns.add(key);
 
     const activity = ensureThreadActivity(threadId);
@@ -1905,6 +2624,7 @@ function handleNotification(message) {
   }
 
   if (method === "thread/closed" && threadId) {
+    state.compactPendingThreads.delete(threadId);
     const activity = ensureThreadActivity(threadId);
     activity.phase = "idle";
     activity.terminalPhase = null;
@@ -1919,6 +2639,13 @@ function handleNotification(message) {
   }
 
   if (threadId && threadId !== state.currentThreadId) {
+    if (
+      (method === "item/started" || method === "item/completed") &&
+      params.item?.type === "userMessage" &&
+      params.item.clientId
+    ) {
+      acceptBackgroundOptimisticUserMessage(params.item.clientId);
+    }
     queueThreadEvent(message);
     return;
   }
@@ -2590,8 +3317,17 @@ function closeSidebar() {
 let searchTimer;
 
 elements.prompt.addEventListener("input", () => {
+  if (state.slashDismissedValue !== elements.prompt.value) {
+    state.slashDismissedValue = null;
+  }
   saveCurrentDraft();
   resizePrompt();
+});
+elements.prompt.addEventListener("click", () => updateSlashCommandMenu());
+elements.prompt.addEventListener("keyup", (event) => {
+  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    updateSlashCommandMenu();
+  }
 });
 elements.prompt.addEventListener("paste", handlePromptPaste);
 elements.addImages.addEventListener("click", () => elements.imageInput.click());
@@ -2624,12 +3360,55 @@ elements.previousUserMessage.addEventListener("click", () =>
 );
 elements.nextUserMessage.addEventListener("click", () => navigateToUserMessage("next"));
 elements.prompt.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  const slashMenuOpen = !elements.slashCommandMenu.classList.contains("hidden");
+  if (slashMenuOpen && event.key === "Escape") {
+    event.preventDefault();
+    closeSlashCommandMenu(true);
+    return;
+  }
+  if (slashMenuOpen && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+    event.preventDefault();
+    moveSlashCommandSelection(event.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if (slashMenuOpen && event.key === "Tab" && state.slashFilteredCommands.length) {
+    event.preventDefault();
+    replacePromptWithSlashCommand(state.slashFilteredCommands[state.slashActiveIndex]);
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
-    sendPrompt();
+    if (slashMenuOpen && state.slashFilteredCommands.length) {
+      void activateHighlightedSlashCommand();
+    } else {
+      void sendPrompt();
+    }
   }
 });
-elements.sendMessage.addEventListener("click", () => sendPrompt());
+elements.slashCommandOptions.addEventListener("pointerdown", (event) => {
+  if (event.target.closest("[data-slash-command]")) event.preventDefault();
+});
+elements.slashCommandOptions.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-slash-command]");
+  if (!option) return;
+  const command = slashCommandByName(option.dataset.slashCommand);
+  const index = state.slashFilteredCommands.findIndex(
+    (candidate) => candidate.name === command?.name,
+  );
+  if (index >= 0) state.slashActiveIndex = index;
+  void activateHighlightedSlashCommand();
+});
+elements.sendMessage.addEventListener("click", () => {
+  if (
+    !elements.slashCommandMenu.classList.contains("hidden") &&
+    state.slashFilteredCommands.length
+  ) {
+    void activateHighlightedSlashCommand();
+  } else {
+    void sendPrompt();
+  }
+});
 elements.stopTurn.addEventListener("click", stopTurn);
 elements.newChat.addEventListener("click", newChat);
 elements.threadList.addEventListener("click", (event) => {
@@ -2679,6 +3458,9 @@ elements.inputForm.addEventListener("submit", submitInputRequest);
 document.addEventListener("pointerdown", primeCompletionAudio, {
   capture: true,
   once: true,
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!event.target.closest(".composer")) closeSlashCommandMenu(true);
 });
 document.addEventListener("keydown", primeCompletionAudio, {
   capture: true,

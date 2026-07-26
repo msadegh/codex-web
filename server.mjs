@@ -87,6 +87,7 @@ const RPC_ALLOWLIST = new Set([
   "thread/resume",
   "thread/archive",
   "thread/unarchive",
+  "thread/compact/start",
   "thread/setName",
   "turn/start",
   "turn/steer",

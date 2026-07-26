@@ -123,6 +123,26 @@
             <span aria-hidden="true">↓</span>
           </button>
           <div class="composer">
+            <div
+              class="slash-command-menu hidden"
+              id="slash-command-menu"
+              role="listbox"
+              aria-label="فرمان‌های Codex Web"
+            >
+              <div class="slash-command-menu-header">
+                <span>فرمان‌ها</span>
+                <span dir="ltr">↑↓ · Enter · Esc</span>
+              </div>
+              <div class="slash-command-options" id="slash-command-options"></div>
+              <p class="slash-command-empty hidden" id="slash-command-empty">
+                فرمان پشتیبانی‌شده‌ای پیدا نشد.
+              </p>
+            </div>
+            <span
+              class="visually-hidden"
+              id="slash-command-status"
+              aria-live="polite"
+            ></span>
             <input
               class="image-input"
               id="image-input"
@@ -138,6 +158,11 @@
               dir="auto"
               placeholder="پیام به Codex…"
               aria-label="پیام به Codex"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-controls="slash-command-menu"
+              aria-expanded="false"
+              aria-haspopup="listbox"
             ></textarea>
             <div class="composer-footer">
               <div class="composer-context">

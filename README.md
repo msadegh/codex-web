@@ -168,6 +168,27 @@ in the browser apply to newly created conversations. Reasoning effort applies
 when a new turn starts. Resumed conversations keep their stored settings and
 the launch-time CLI defaults.
 
+## Slash commands
+
+Type `/` in the composer to open the command menu, then keep typing to filter
+the list or select a command with the keyboard, mouse, or touch.
+
+| Command | Action |
+| --- | --- |
+| `/compact` | Natively compact the current Codex context; available only for an existing, idle conversation |
+| `/new` | Start a new conversation |
+| `/clear` | Clear the current view and start a fresh conversation |
+| `/resume` | Open the saved-conversation list |
+| `/status` | Show the current conversation status |
+| `/model` | Open model settings |
+| `/permissions` | Open sandbox and approval settings |
+| `/settings` | Open all conversation settings |
+| `/help` | Show the supported command list |
+
+Unknown slash commands are not sent to the model. Codex Web currently supports
+only the commands listed above, not every slash command available in the Codex
+terminal UI.
+
 ## Parallel conversations
 
 One Codex Web process can run multiple Codex threads concurrently. Start a

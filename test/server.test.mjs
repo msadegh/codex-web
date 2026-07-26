@@ -185,6 +185,31 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   assert.equal(threadResponse.status, 200);
   assert.equal((await threadResponse.json()).result.thread.id, "test-thread");
 
+  const compactResponse = await fetch(`${baseUrl}/api/rpc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      method: "thread/compact/start",
+      params: { threadId: "test-thread" },
+    }),
+  });
+  assert.equal(compactResponse.status, 200);
+  assert.deepEqual(await compactResponse.json(), { result: {} });
+
+  const rejectedMethod = "thread/delete";
+  const rejectedRpcResponse = await fetch(`${baseUrl}/api/rpc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      method: rejectedMethod,
+      params: { threadId: "test-thread" },
+    }),
+  });
+  assert.equal(rejectedRpcResponse.status, 403);
+  assert.deepEqual(await rejectedRpcResponse.json(), {
+    error: `RPC method is not allowed: ${rejectedMethod}`,
+  });
+
   const childArgs = JSON.parse(await readFile(argsFile, "utf8"));
   assert.deepEqual(childArgs.slice(-2), ["app-server", "--stdio"]);
   assert.equal(childArgs.includes('model="test-model"'), true);
@@ -199,4 +224,12 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   const threadStart = messages.find((message) => message.method === "thread/start");
   assert.equal(threadStart.params.approvalPolicy, "never");
   assert.equal(threadStart.params.sandbox, "danger-full-access");
+  const compactStart = messages.find(
+    (message) => message.method === "thread/compact/start",
+  );
+  assert.deepEqual(compactStart?.params, { threadId: "test-thread" });
+  assert.equal(
+    messages.some((message) => message.method === rejectedMethod),
+    false,
+  );
 });

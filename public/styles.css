@@ -1055,6 +1055,7 @@ textarea:focus-visible {
 }
 
 .composer {
+  position: relative;
   width: min(850px, 100%);
   margin: 0 auto;
   padding: 7px 9px 8px;
@@ -1066,6 +1067,105 @@ textarea:focus-visible {
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
+}
+
+.slash-command-menu {
+  position: absolute;
+  z-index: 30;
+  inset-inline: 9px;
+  bottom: calc(100% + 8px);
+  display: flex;
+  max-height: min(310px, calc(100dvh - 180px));
+  overflow: hidden;
+  flex-direction: column;
+  color: var(--text);
+  background: #1d221d;
+  border: 1px solid #414a3e;
+  border-radius: 13px;
+  box-shadow: 0 18px 55px rgb(0 0 0 / 0.48);
+  direction: rtl;
+}
+
+.slash-command-menu-header {
+  display: flex;
+  padding: 9px 12px 7px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted-2);
+  border-bottom: 1px solid #30372e;
+  font-size: 0.66rem;
+}
+
+.slash-command-options {
+  min-height: 0;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.slash-command-option {
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  padding: 7px 9px;
+  grid-template-columns: minmax(92px, auto) 1fr;
+  align-items: center;
+  gap: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  text-align: start;
+}
+
+.slash-command-option:hover,
+.slash-command-option.active {
+  background: #2a3128;
+}
+
+.slash-command-option[aria-disabled="true"] {
+  color: var(--muted-2);
+}
+
+.slash-command-name {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: isolate;
+}
+
+.slash-command-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.slash-command-copy strong {
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.slash-command-copy small {
+  overflow-wrap: anywhere;
+  color: var(--muted-2);
+  font-size: 0.65rem;
+  line-height: 1.45;
+}
+
+.slash-command-option[aria-disabled="true"] .slash-command-copy small {
+  color: #b9a98c;
+}
+
+.slash-command-empty {
+  margin: 0;
+  padding: 15px 12px;
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  text-align: center;
 }
 
 .image-input {
@@ -1233,6 +1333,87 @@ button.context-chip:hover {
   font-size: 0.63rem;
   text-align: center;
   pointer-events: none;
+}
+
+.local-command-card {
+  width: min(720px, 100%);
+  margin-inline: auto;
+  padding: 13px 15px;
+  color: var(--text);
+  background: #1b201b;
+  border: 1px solid #394137;
+  border-radius: 12px;
+  box-shadow: 0 9px 28px rgb(0 0 0 / 0.2);
+}
+
+.local-command-card h3 {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 0.83rem;
+}
+
+.local-command-card dl {
+  display: grid;
+  margin: 0;
+  grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+  gap: 7px 14px;
+}
+
+.local-command-card dt {
+  color: var(--muted-2);
+  font-size: 0.7rem;
+}
+
+.local-command-card dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.74rem;
+  unicode-bidi: plaintext;
+}
+
+.local-command-help {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 7px;
+  list-style: none;
+}
+
+.local-command-help li {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.local-command-help code {
+  color: var(--accent);
+  direction: ltr;
+  text-align: left;
+}
+
+.activity-card.compaction-status {
+  cursor: default;
+}
+
+.activity-card.compaction-status summary::before {
+  content: "◌";
+}
+
+.activity-card.compaction-status.running summary::before {
+  animation: status-spin 1.1s linear infinite;
+}
+
+.activity-card.compaction-status.completed summary::before {
+  content: "✓";
+  animation: none;
+}
+
+.activity-card.compaction-status summary::after {
+  content: none;
 }
 
 .mobile-scrim {
@@ -1658,6 +1839,32 @@ dialog form,
 
   .composer-hint {
     display: none;
+  }
+
+  .slash-command-menu {
+    inset-inline: 5px;
+    max-height: min(280px, calc(100dvh - 150px));
+  }
+
+  .slash-command-menu-header {
+    padding-inline: 9px;
+  }
+
+  .slash-command-option {
+    min-height: 52px;
+    padding-inline: 7px;
+    grid-template-columns: minmax(78px, auto) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .local-command-card dl {
+    grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
+    gap-inline: 9px;
+  }
+
+  .local-command-help li {
+    grid-template-columns: minmax(78px, auto) minmax(0, 1fr);
+    gap: 8px;
   }
 
   .context-chip.passive {
