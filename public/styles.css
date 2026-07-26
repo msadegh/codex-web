@@ -700,6 +700,67 @@ textarea:focus-visible {
   border-inline-start: 3px solid #56624f;
 }
 
+.markdown-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  margin: 0.9em 0 1.1em;
+  overflow-x: auto;
+  border-radius: 10px;
+  scrollbar-color: #4b5548 transparent;
+  scrollbar-width: thin;
+}
+
+.markdown-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  background: #111411;
+  line-height: 1.55;
+}
+
+.markdown-table th,
+.markdown-table td {
+  min-width: 7.5rem;
+  max-width: min(34rem, 72vw);
+  padding: 9px 12px;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  text-align: start;
+  unicode-bidi: plaintext;
+  vertical-align: top;
+}
+
+.markdown-table th {
+  color: #f5f8f0;
+  background: #1b201a;
+  font-weight: 700;
+}
+
+.markdown-table td {
+  color: #d9ded6;
+}
+
+.markdown-table tbody tr:nth-child(even) td {
+  background: rgb(255 255 255 / 0.018);
+}
+
+.markdown-table .align-left {
+  text-align: left;
+}
+
+.markdown-table .align-center {
+  text-align: center;
+}
+
+.markdown-table .align-right {
+  text-align: right;
+}
+
+.markdown-table code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .message-content a {
   color: #bde3ff;
   text-decoration-color: rgb(189 227 255 / 0.45);

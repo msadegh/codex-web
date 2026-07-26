@@ -1,6 +1,6 @@
 {
   "name": "codex-web",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "An unofficial, localhost-only browser interface for the Codex CLI.",
   "repository": {
@@ -26,7 +26,7 @@
   "scripts": {
     "start": "node server.mjs",
     "start:no-open": "node server.mjs --no-open",
-    "check": "node --check server.mjs && node --check public/app.js",
+    "check": "node --check server.mjs && node --check public/app.js && node --check public/markdown.js",
     "test": "node --test"
   },
   "devDependencies": {
