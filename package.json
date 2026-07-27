@@ -1,8 +1,8 @@
 {
   "name": "codex-web",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
-  "description": "An unofficial, localhost-only browser interface for the Codex CLI.",
+  "description": "An unofficial, localhost-only browser interface for Codex CLI and Claude Code CLI.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/msadegh/codex-web.git"
@@ -16,6 +16,7 @@
   },
   "files": [
     "public",
+    "providers",
     "server.mjs",
     "README.md",
     "README.fa.md",
@@ -26,7 +27,7 @@
   "scripts": {
     "start": "node server.mjs",
     "start:no-open": "node server.mjs --no-open",
-    "check": "node --check server.mjs && node --check public/app.js && node --check public/markdown.js",
+    "check": "node --check server.mjs && node --check providers/claude-provider.mjs && node --check public/app.js && node --check public/markdown.js",
     "test": "node --test"
   },
   "devDependencies": {
@@ -38,6 +39,8 @@
   "keywords": [
     "codex",
     "codex-cli",
+    "claude",
+    "claude-code",
     "web-ui",
     "rtl",
     "persian"

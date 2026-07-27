@@ -11,6 +11,7 @@ import test from "node:test";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SERVER = join(ROOT, "server.mjs");
 const FAKE_CODEX = join(ROOT, "test-support", "fake-codex.mjs");
+const FAKE_CLAUDE = join(ROOT, "test-support", "fake-claude.mjs");
 
 async function freePort() {
   const listener = createServer();
@@ -69,6 +70,16 @@ async function stopChild(child) {
   signalGroup("SIGKILL");
 }
 
+async function waitFor(check, timeout = 5_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
 test("CLI exposes help and version without starting the server", async () => {
   const packageInfo = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
 
@@ -116,6 +127,7 @@ test("server starts with a fake Codex bridge and enforces local security boundar
         ...process.env,
         CODEX_BIN: FAKE_CODEX,
         CODEX_HOME: codexHome,
+        CODEX_WEB_CWD: temporaryRoot,
         CODEX_WEB_PORT: String(port),
         XDG_CACHE_HOME: cacheHome,
         FAKE_CODEX_ARGS_FILE: argsFile,
@@ -232,4 +244,150 @@ test("server starts with a fake Codex bridge and enforces local security boundar
     messages.some((message) => message.method === rejectedMethod),
     false,
   );
+});
+
+test("Claude provider supports sessions, streaming, resume, and merged thread listing", async (t) => {
+  const temporaryRoot = await mkdtemp(join(os.tmpdir(), "codex-web-claude-test-"));
+  const cacheHome = join(temporaryRoot, "cache");
+  const claudeDataDir = join(temporaryRoot, "claude-data");
+  const claudeHome = join(temporaryRoot, "claude-home");
+  const nativeProjectDir = join(claudeHome, "projects", "fake-project");
+  const nativeSessionId = "11111111-1111-4111-8111-111111111111";
+  const nativeTranscriptPath = join(nativeProjectDir, `${nativeSessionId}.jsonl`);
+  const argsFile = join(temporaryRoot, "claude-args.json");
+  const messagesFile = join(temporaryRoot, "claude-messages.ndjson");
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  await chmod(FAKE_CODEX, 0o755);
+  await chmod(FAKE_CLAUDE, 0o755);
+  await mkdir(nativeProjectDir, { recursive: true });
+  await writeFile(
+    nativeTranscriptPath,
+    [
+      {
+        type: "user",
+        uuid: "native-user",
+        cwd: temporaryRoot,
+        sessionId: nativeSessionId,
+        timestamp: "2026-07-26T10:00:00.000Z",
+        message: { role: "user", content: "پیام قبلی Claude" },
+      },
+      { type: "ai-title", sessionId: nativeSessionId, aiTitle: "گفتگوی قبلی Claude" },
+      {
+        type: "assistant",
+        uuid: "native-assistant",
+        message: {
+          role: "assistant",
+          content: "پاسخ قبلی Claude",
+        },
+      },
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+  );
+  const child = spawn(process.execPath, [SERVER, "--no-open"], {
+    cwd: temporaryRoot,
+    env: {
+      ...process.env,
+      CODEX_BIN: FAKE_CODEX,
+      CLAUDE_BIN: FAKE_CLAUDE,
+      CODEX_WEB_CWD: temporaryRoot,
+      CLAUDE_HOME: claudeHome,
+      CLAUDE_WEB_DATA_DIR: claudeDataDir,
+      CODEX_WEB_PORT: String(port),
+      XDG_CACHE_HOME: cacheHome,
+      FAKE_CLAUDE_ARGS_FILE: argsFile,
+      FAKE_CLAUDE_MESSAGES_FILE: messagesFile,
+      FAKE_CLAUDE_TRANSCRIPT_FILE: nativeTranscriptPath,
+      FAKE_CLAUDE_NATIVE_SESSION_ID: nativeSessionId,
+    },
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(async () => {
+    await stopChild(child);
+    await rm(temporaryRoot, { recursive: true, force: true });
+  });
+
+  await waitForReady(baseUrl, child);
+  const rpc = async (method, params = {}) => {
+    const response = await fetch(`${baseUrl}/api/rpc`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method, params }),
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
+
+  const started = await rpc("thread/start", {
+    provider: "claude",
+    cwd: temporaryRoot,
+    model: "sonnet",
+    permissionMode: "acceptEdits",
+  });
+  const threadId = started.thread.id;
+  assert.match(threadId, /^claude:/);
+
+  const firstClientUserMessageId = "claude-client-message-1";
+  const firstTurn = await rpc("turn/start", {
+    provider: "claude",
+    threadId,
+    clientUserMessageId: firstClientUserMessageId,
+    input: [{ type: "text", text: "سلام" }],
+  });
+  assert.equal(firstTurn.turn.status, "inProgress");
+  assert.equal(firstTurn.turn.items[0].clientId, firstClientUserMessageId);
+
+  const firstRead = await waitFor(async () => {
+    const result = await rpc("thread/read", { provider: "claude", threadId });
+    return result.thread.turns.at(-1)?.status === "completed" ? result : null;
+  });
+  assert.match(firstRead.thread.turns.at(-1).items.at(-1).text, /سلام/);
+  assert.equal(
+    firstRead.thread.turns.at(-1).items[0].clientId,
+    firstClientUserMessageId,
+  );
+  const firstArgs = JSON.parse(await readFile(argsFile, "utf8"));
+  assert.equal(firstArgs.includes("--session-id"), true);
+  assert.equal(firstArgs.includes("--output-format"), true);
+  assert.equal(firstArgs.includes("stream-json"), true);
+
+  await rpc("turn/start", {
+    provider: "claude",
+    threadId,
+    input: [{ type: "text", text: "دوباره" }],
+  });
+  await waitFor(async () => {
+    const result = await rpc("thread/read", { provider: "claude", threadId });
+    return result.thread.turns.length === 2 && result.thread.turns.at(-1)?.status === "completed";
+  });
+  const secondArgs = JSON.parse(await readFile(argsFile, "utf8"));
+  assert.equal(secondArgs.includes("--resume"), true);
+
+  const merged = await rpc("thread/list");
+  assert.equal(merged.data.some((thread) => thread.id === threadId), true);
+  const nativeThreadId = `claude:${nativeSessionId}`;
+  assert.equal(merged.data.some((thread) => thread.id === nativeThreadId), true);
+
+  const nativeRead = await rpc("thread/read", {
+    provider: "claude",
+    threadId: nativeThreadId,
+  });
+  assert.equal(nativeRead.thread.name, "گفتگوی قبلی Claude");
+  assert.match(nativeRead.thread.turns.at(-1).items.at(-1).text, /پاسخ قبلی/);
+
+  await rpc("turn/start", {
+    provider: "claude",
+    threadId: nativeThreadId,
+    input: [{ type: "text", text: "ادامه بده" }],
+  });
+  await waitFor(async () => {
+    const result = await rpc("thread/read", {
+      provider: "claude",
+      threadId: nativeThreadId,
+    });
+    return result.thread.turns.length >= 2 && result.thread.turns.at(-1)?.status === "completed";
+  });
+  const nativeArgs = JSON.parse(await readFile(argsFile, "utf8"));
+  assert.equal(nativeArgs.includes("--resume"), true);
 });

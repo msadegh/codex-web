@@ -6,6 +6,7 @@ const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
 const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
+const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const IMAGE_EXTENSIONS = {
   "image/avif": "avif",
   "image/bmp": "bmp",
@@ -192,6 +193,8 @@ const elements = {
   nextUserMessage: $("#next-user-message"),
   openSettings: $("#open-settings"),
   personalitySelect: $("#personality-select"),
+  providerSelect: $("#provider-select"),
+  claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
   prompt: $("#prompt"),
   sandboxSelect: $("#sandbox-select"),
@@ -217,18 +220,22 @@ const elements = {
   uploadStatus: $("#upload-status"),
   userMessageNavigationStatus: $("#user-message-navigation-status"),
   welcome: $("#welcome"),
+  welcomeDescription: $("#welcome-description"),
+  welcomeTitle: $("#welcome-title"),
 };
 
 const defaultSettings = {
   approvalPolicy: "",
+  claudePermissionMode: "acceptEdits",
   cwd: "",
   effort: "",
-  model: "",
+  modelByProvider: { codex: "", claude: "" },
   personality: "",
+  provider: "codex",
   sandbox: "",
 };
 
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 4;
 
 const state = {
   activeInteractionKey: null,
@@ -245,12 +252,18 @@ const state = {
   itemViews: new Map(),
   navigationVersion: 0,
   models: [],
+  modelsByProvider: { codex: [], claude: [] },
   navigating: false,
+  openingThreadId: null,
   newDraftId: crypto.randomUUID(),
   notifiedTurns: new Set(),
   optimisticUserMessages: new Map(),
   pendingInteractions: new Map(),
   postponedInteractions: new Set(),
+  providerStatuses: {
+    claude: { message: "Claude Code CLI پیدا نشد", ready: false },
+    codex: { message: "در حال راه‌اندازی Codex…", ready: false },
+  },
   forceNextScroll: false,
   imageUploadsByDraft: new Map(),
   interactionSubmitting: false,
@@ -267,6 +280,10 @@ const state = {
   threadTokenUsage: new Map(),
   threads: [],
   threadsRefreshVersion: 0,
+  urlHydrationActiveKey: null,
+  urlHydrationPending: null,
+  urlHydrated: false,
+  urlHydrationPromise: null,
   userMessageHighlightTimer: null,
   userMessageNavigationFrame: null,
   userNavigationItemId: null,
@@ -275,25 +292,30 @@ const state = {
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("codex-web-settings") || "{}");
-    if (saved.version !== SETTINGS_VERSION) {
-      return {
-        ...defaultSettings,
-        cwd: saved.cwd || defaultSettings.cwd,
-        effort: saved.effort || "",
-        model: saved.model || "",
-        personality: saved.personality || "",
-      };
-    }
-    return { ...defaultSettings, ...saved };
+    const { model: legacyModel, modelByProvider: storedModels, ...savedSettings } = saved;
+    const modelByProvider = {
+      ...defaultSettings.modelByProvider,
+      ...(storedModels || {}),
+    };
+    if (!modelByProvider.codex && legacyModel) modelByProvider.codex = legacyModel;
+    return {
+      ...defaultSettings,
+      ...savedSettings,
+      claudePermissionMode:
+        savedSettings.claudePermissionMode || defaultSettings.claudePermissionMode,
+      modelByProvider,
+      provider: savedSettings.provider === "claude" ? "claude" : defaultSettings.provider,
+    };
   } catch {
     return { ...defaultSettings };
   }
 }
 
 function persistSettings() {
+  const { model, ...settings } = state.settings;
   localStorage.setItem(
     "codex-web-settings",
-    JSON.stringify({ ...state.settings, version: SETTINGS_VERSION }),
+    JSON.stringify({ ...settings, version: SETTINGS_VERSION }),
   );
 }
 
@@ -313,6 +335,25 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function providerForThread(threadId) {
+  return typeof threadId === "string" && threadId.startsWith("claude:")
+    ? "claude"
+    : "codex";
+}
+
+function providerLabel(provider) {
+  return provider === "claude" ? "Claude" : "Codex";
+}
+
+function effectiveProvider() {
+  if (state.openingThreadId) return providerForThread(state.openingThreadId);
+  if (state.currentThreadId) {
+    return state.currentThread?.provider || providerForThread(state.currentThreadId);
+  }
+  const urlThreadId = !state.urlHydrated ? threadIdFromUrl() : "";
+  return urlThreadId ? providerForThread(urlThreadId) : state.settings.provider;
 }
 
 async function rpc(method, params = {}) {
@@ -383,10 +424,16 @@ function slashCommandAvailability(command) {
     return { available: false, reason: "یک فرمان دیگر در حال اجراست." };
   }
   if (command.name === "compact") {
-    if (!state.connected) return { available: false, reason: "Codex هنوز متصل نیست." };
     if (!state.currentThreadId) {
       return { available: false, reason: "ابتدا یک گفتگو را شروع یا باز کنید." };
     }
+    if (effectiveProvider() !== "codex") {
+      return {
+        available: false,
+        reason: "فشرده‌سازی context فقط برای گفتگوهای Codex پشتیبانی می‌شود.",
+      };
+    }
+    if (!state.connected) return { available: false, reason: "Codex هنوز متصل نیست." };
     if (state.busy || state.compactPendingThreads.has(state.currentThreadId)) {
       return { available: false, reason: "پس از پایان کار فعلی دوباره امتحان کنید." };
     }
@@ -577,17 +624,32 @@ function showSlashStatus() {
   const runtime = threadId ? state.threadRuntime.get(threadId) || {} : {};
   const thread = state.currentThread;
   const usage = threadId ? state.threadTokenUsage.get(threadId) : null;
+  const provider = effectiveProvider();
+  const label = providerLabel(provider);
+  const selectedModel = state.settings.modelByProvider[provider] || "";
   const rows = [
+    ["Agent", label],
     ["اتصال", state.connected ? "متصل" : "قطع"],
     ["وضعیت", state.busy ? "در حال اجرا" : threadId ? "آماده" : "گفتگوی تازه"],
     ["شناسهٔ گفتگو", threadId || "هنوز ساخته نشده"],
     ["پوشهٔ کاری", runtime.cwd || thread?.cwd || state.settings.cwd || "نامشخص"],
-    ["مدل", runtime.model || thread?.model || state.settings.model || "پیش‌فرض Codex"],
-    ["Sandbox", readableSandbox(runtime.sandbox || state.settings.sandbox)],
-    ["Approval", readableApproval(runtime.approvalPolicy || state.settings.approvalPolicy)],
-    ["Context", contextUsageText(usage)],
+    ["مدل", runtime.model || thread?.model || selectedModel || `پیش‌فرض ${label}`],
   ];
-  const card = renderLocalCommandCard("وضعیت Codex");
+  if (provider === "claude") {
+    rows.push([
+      "Permission mode",
+      runtime.permissionMode ||
+        thread?.permissionMode ||
+        (!threadId ? state.settings.claudePermissionMode : "نامشخص"),
+    ]);
+  } else {
+    rows.push(
+      ["Sandbox", readableSandbox(runtime.sandbox || state.settings.sandbox)],
+      ["Approval", readableApproval(runtime.approvalPolicy || state.settings.approvalPolicy)],
+      ["Context", contextUsageText(usage)],
+    );
+  }
+  const card = renderLocalCommandCard(`وضعیت ${label}`);
   const list = document.createElement("dl");
   for (const [label, value] of rows) {
     const term = document.createElement("dt");
@@ -706,13 +768,17 @@ async function executeSlashCommand(command) {
       return;
     case "model":
       clearSlashCommandText(command.token, targetDraftKey);
-      openSettings();
-      setTimeout(() => elements.modelSelect.focus(), 0);
+      openSettings({ focus: elements.modelSelect, provider: effectiveProvider() });
       return;
     case "permissions":
       clearSlashCommandText(command.token, targetDraftKey);
-      openSettings();
-      setTimeout(() => elements.sandboxSelect.focus(), 0);
+      openSettings({
+        focus:
+          effectiveProvider() === "claude"
+            ? elements.claudePermissionMode
+            : elements.sandboxSelect,
+        provider: effectiveProvider(),
+      });
       return;
     case "settings":
       clearSlashCommandText(command.token, targetDraftKey);
@@ -923,11 +989,80 @@ function updateComposerControls() {
   updateSlashCommandMenu();
 }
 
-function updateConnection(ready, message = "") {
+function updateAgentCopy(provider) {
+  const label = providerLabel(provider);
+  elements.prompt.placeholder = `پیام به ${label}…`;
+  elements.prompt.setAttribute("aria-label", `پیام به ${label}`);
+  if (provider === "claude") {
+    elements.welcomeTitle.textContent = "چه کاری را به Claude بسپاریم؟";
+    elements.welcomeDescription.textContent =
+      "پشت این صفحه Claude Code CLI اجرا می‌شود؛ با sessionها و permission mode خود Claude.";
+  } else {
+    elements.welcomeTitle.textContent = "چه کاری روی کد انجام دهیم؟";
+    elements.welcomeDescription.textContent =
+      "پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها، MCPها و دسترسی‌های ترمینال شما.";
+  }
+}
+
+function updateConnection() {
+  const provider = effectiveProvider();
+  const status = state.providerStatuses[provider] || {};
+  const ready = Boolean(status.ready);
+  const label = providerLabel(provider);
   state.connected = ready;
   elements.statusDot.className = `status-dot ${ready ? "ready" : "starting"}`;
-  elements.connectionLabel.textContent = ready ? "Codex متصل است" : message || "در حال اتصال…";
+  elements.connectionLabel.textContent = ready
+    ? `${label} متصل است`
+    : status.message || `در حال اتصال به ${label}…`;
+  updateAgentCopy(provider);
   updateComposerControls();
+}
+
+function setProviderStatus(provider, status = {}) {
+  if (provider !== "codex" && provider !== "claude") return false;
+  const previous = state.providerStatuses[provider] || {};
+  const next = {
+    ...previous,
+    ...status,
+    ready: Boolean(status.ready),
+  };
+  state.providerStatuses[provider] = next;
+  return previous.ready !== next.ready || previous.message !== next.message;
+}
+
+function applyProviderStatusPayload(data = {}) {
+  let changed = false;
+  if (data.providers) {
+    for (const provider of ["codex", "claude"]) {
+      if (data.providers[provider]) {
+        changed = setProviderStatus(provider, data.providers[provider]) || changed;
+      }
+    }
+  } else if (
+    (data.provider === "codex" || data.provider === "claude") &&
+    Object.hasOwn(data, "ready")
+  ) {
+    changed =
+      setProviderStatus(data.provider, {
+        message: data.message || "",
+        ready: Boolean(data.ready),
+      }) || changed;
+  } else if (Object.hasOwn(data, "ready")) {
+    // Provider-less app-server status notifications have historically described Codex only.
+    changed =
+      setProviderStatus("codex", {
+        message: data.message || "",
+        ready: Boolean(data.ready),
+      }) || changed;
+  }
+  updateConnection();
+  return changed;
+}
+
+function markProviderConnectionsUnavailable(message) {
+  setProviderStatus("codex", { message, ready: false });
+  setProviderStatus("claude", { message, ready: false });
+  updateConnection();
 }
 
 function setBusy(busy, turnId = null) {
@@ -941,28 +1076,64 @@ function setNavigating(navigating) {
   state.navigating = navigating;
   if (navigating) closeSlashCommandMenu();
   elements.prompt.disabled = navigating;
+  updateConnection();
   updateComposerControls();
   resizePrompt();
 }
 
+function updateFullAccessWarning(provider = elements.providerSelect.value) {
+  const dangerous =
+    provider === "claude"
+      ? elements.claudePermissionMode.value === "bypassPermissions"
+      : elements.sandboxSelect.value === "danger-full-access";
+  elements.fullAccessWarning.classList.toggle("visible", dangerous);
+}
+
+function updateSettingsProviderUi(provider) {
+  elements.settingsDialog.dataset.provider = provider;
+  const ultraEffort = elements.effortSelect.querySelector('option[value="ultra"]');
+  if (ultraEffort) {
+    ultraEffort.disabled = provider === "claude";
+    ultraEffort.hidden = provider === "claude";
+    if (provider === "claude" && elements.effortSelect.value === "ultra") {
+      elements.effortSelect.value = "";
+    } else if (
+      provider === "codex" &&
+      !elements.effortSelect.value &&
+      state.settings.effort === "ultra"
+    ) {
+      elements.effortSelect.value = "ultra";
+    }
+  }
+  updateFullAccessWarning(provider);
+}
+
+function updateModelLabel(provider = state.settings.provider) {
+  const models = state.modelsByProvider[provider] || [];
+  const selectedModel = state.settings.modelByProvider[provider] || "";
+  const model = models.find(
+    (candidate) =>
+      candidate.id === selectedModel || candidate.model === selectedModel,
+  );
+  elements.modelLabel.textContent = model?.displayName || selectedModel || "مدل پیش‌فرض";
+}
+
 function updateSettingsUi() {
+  const provider = state.settings.provider;
+  state.models = state.modelsByProvider[provider] || [];
+  const selectedModel = state.settings.modelByProvider[provider] || "";
   elements.cwdInput.value = state.settings.cwd;
   elements.cwdLabel.textContent = shortPath(state.settings.cwd, 38);
   elements.cwdLabel.title = state.settings.cwd;
-  elements.modelSelect.value = state.settings.model;
+  elements.providerSelect.value = provider;
+  renderModelOptions(state.models, selectedModel, provider);
   elements.effortSelect.value = state.settings.effort;
   elements.sandboxSelect.value = state.settings.sandbox;
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
-  elements.fullAccessWarning.classList.toggle(
-    "visible",
-    state.settings.sandbox === "danger-full-access",
-  );
-  const model = state.models.find(
-    (candidate) =>
-      candidate.id === state.settings.model || candidate.model === state.settings.model,
-  );
-  elements.modelLabel.textContent = model?.displayName || state.settings.model || "مدل پیش‌فرض";
+  elements.claudePermissionMode.value = state.settings.claudePermissionMode;
+  updateSettingsProviderUi(provider);
+  updateModelLabel(provider);
 }
 
 function shortPath(path, length = 30) {
@@ -973,10 +1144,17 @@ function shortPath(path, length = 30) {
   return `…/${parts.slice(-2).join("/")}`;
 }
 
-function openSettings() {
+function openSettings({ focus = elements.cwdInput, provider = state.settings.provider } = {}) {
   updateSettingsUi();
+  if (provider !== state.settings.provider) {
+    elements.providerSelect.value = provider;
+    updateSettingsProviderUi(provider);
+    const models = state.modelsByProvider[provider] || [];
+    renderModelOptions(models, state.settings.modelByProvider[provider] || "", provider);
+    void loadModels(provider);
+  }
   elements.settingsDialog.showModal();
-  setTimeout(() => elements.cwdInput.focus(), 0);
+  setTimeout(() => focus.focus(), 0);
 }
 
 function saveSettings() {
@@ -985,16 +1163,27 @@ function saveSettings() {
     toast("پوشه کاری باید با / شروع شود.", "error");
     return;
   }
+  const provider = elements.providerSelect.value;
   state.settings = {
     approvalPolicy: elements.approvalSelect.value,
+    claudePermissionMode: elements.claudePermissionMode.value,
     cwd,
     effort: elements.effortSelect.value,
-    model: elements.modelSelect.value,
+    modelByProvider: {
+      ...state.settings.modelByProvider,
+      [provider]: elements.modelSelect.value,
+    },
     personality: elements.personalitySelect.value,
+    provider,
     sandbox: elements.sandboxSelect.value,
   };
   persistSettings();
+  state.models = state.modelsByProvider[provider] || [];
   updateSettingsUi();
+  updateConnection();
+  void loadModels();
+  void refreshThreads();
+  void refreshProviderStatus();
   elements.settingsDialog.close();
 }
 
@@ -1284,9 +1473,15 @@ function renderThreadList() {
     title.dir = "auto";
     title.textContent = threadDisplayTitle(thread);
 
+    const provider = document.createElement("span");
+    provider.className = "thread-provider";
+    provider.dir = "ltr";
+    provider.textContent = thread.provider === "claude" ? "Claude" : "Codex";
+    provider.title = thread.provider === "claude" ? "Claude Code CLI" : "Codex CLI";
+
     const heading = document.createElement("span");
     heading.className = "thread-item-heading";
-    heading.append(title);
+    heading.append(title, provider);
     const presentation = threadActivityPresentation(thread.id);
     if (presentation) {
       const activity = document.createElement("span");
@@ -1362,29 +1557,152 @@ function restoreDraft(threadId = state.currentThreadId) {
   resizePrompt();
 }
 
-function newChat() {
+function threadIdFromUrl() {
+  if (!window.location?.href) return "";
+  return new URL(window.location.href).searchParams.get("thread") || "";
+}
+
+function historyStateMatches(stateValue) {
+  const current = window.history?.state || {};
+  return (
+    (current.threadId || "") === (stateValue.threadId || "") &&
+    (current.draftId || "") === (stateValue.draftId || "")
+  );
+}
+
+function updateThreadUrl(threadId, mode = "push", draftId = state.newDraftId) {
+  if (!window.location?.href || !window.history) return;
+  const url = new URL(window.location.href);
+  const current = url.searchParams.get("thread") || "";
+  if (threadId) url.searchParams.set("thread", threadId);
+  else url.searchParams.delete("thread");
+  const target = threadId || "";
+  const stateValue = threadId ? { threadId } : { draftId };
+  const sameUrl = current === target;
+  if (mode === "none" && !sameUrl) return;
+  if (sameUrl && historyStateMatches(stateValue)) return;
+  if (mode === "none" || sameUrl) mode = "replace";
+  const method = mode === "replace" ? "replaceState" : "pushState";
+  if (typeof window.history[method] !== "function") return;
+  window.history[method](stateValue, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function urlHydrationTarget(draftId = null) {
+  const threadId = threadIdFromUrl();
+  const historyDraftId =
+    typeof window.history?.state?.draftId === "string"
+      ? window.history.state.draftId
+      : "";
+  const targetDraftId = threadId
+    ? ""
+    : draftId || historyDraftId || state.newDraftId;
+  return {
+    draftId: targetDraftId,
+    key: threadId ? `thread:${threadId}` : `draft:${targetDraftId}`,
+    threadId,
+  };
+}
+
+function hydrationTargetMatchesCurrentView(target) {
+  return target.threadId
+    ? state.currentThreadId === target.threadId
+    : !state.currentThreadId && state.newDraftId === target.draftId;
+}
+
+async function hydrateThreadFromUrl({ draftId = null, force = false } = {}) {
+  const requestedTarget = urlHydrationTarget(draftId);
+  if (force) state.urlHydrated = false;
+  if (state.urlHydrated && !state.urlHydrationPromise) return true;
+  if (state.urlHydrationPromise) {
+    if (
+      requestedTarget.key !== state.urlHydrationActiveKey &&
+      requestedTarget.key !== state.urlHydrationPending?.key
+    ) {
+      state.urlHydrationPending = requestedTarget;
+      // Cancel an in-flight resume before it can commit a now-stale history target.
+      state.navigationVersion += 1;
+    }
+    return state.urlHydrationPromise;
+  }
+
+  state.urlHydrationPending = requestedTarget;
+  state.urlHydrationPromise = (async () => {
+    let hydrated = false;
+    while (state.urlHydrationPending) {
+      const target = state.urlHydrationPending;
+      state.urlHydrationPending = null;
+      state.urlHydrationActiveKey = target.key;
+      state.urlHydrated = false;
+
+      const currentTarget = urlHydrationTarget();
+      if (currentTarget.key !== target.key) {
+        state.urlHydrationPending = currentTarget;
+        continue;
+      }
+
+      hydrated = target.threadId
+        ? await openThread(target.threadId, { historyMode: "none" })
+        : newChat({
+            draftId: target.draftId,
+            historyMode: "none",
+          });
+
+      const latestTarget = urlHydrationTarget();
+      if (latestTarget.key !== target.key) {
+        state.urlHydrationPending = latestTarget;
+        continue;
+      }
+      state.urlHydrated =
+        Boolean(hydrated) || hydrationTargetMatchesCurrentView(target);
+      updateConnection();
+    }
+    return state.urlHydrated;
+  })();
+  try {
+    return await state.urlHydrationPromise;
+  } finally {
+    state.urlHydrationActiveKey = null;
+    state.urlHydrationPending = null;
+    state.urlHydrationPromise = null;
+  }
+}
+
+function restoreCurrentViewUrl() {
+  if (state.currentThreadId) {
+    updateThreadUrl(state.currentThreadId, "replace");
+  } else {
+    updateThreadUrl(null, "replace", state.newDraftId);
+  }
+}
+
+function newChat({ draftId = null, historyMode = "push" } = {}) {
   if (!state.currentThreadId && imageUploadsForDraft() > 0) {
     toast("برای حفظ تصاویر این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
-    return;
+    if (historyMode === "none") restoreCurrentViewUrl();
+    return false;
   }
   saveCurrentDraft();
   state.navigationVersion += 1;
   closeInteractionDialogs();
+  state.openingThreadId = null;
   state.currentThread = null;
   state.currentThreadId = null;
   state.currentTurnId = null;
-  state.newDraftId = crypto.randomUUID();
+  state.newDraftId = draftId || crypto.randomUUID();
   setNavigating(false);
   setBusy(false);
   clearConversation();
   elements.welcome.classList.remove("hidden");
   elements.threadTitle.textContent = "گفتگوی تازه";
   elements.threadMeta.textContent = "";
+  updateThreadUrl(null, historyMode, state.newDraftId);
   restoreDraft(null);
   renderThreadList();
   updateAttentionUi();
+  updateConnection();
   closeSidebar();
   elements.prompt.focus();
+  return true;
 }
 
 function setCurrentThread(thread, metadata = {}) {
@@ -1394,20 +1712,29 @@ function setCurrentThread(thread, metadata = {}) {
   const runtime = { ...(state.threadRuntime.get(thread.id) || {}) };
   if (metadata.approvalPolicy !== undefined) runtime.approvalPolicy = metadata.approvalPolicy;
   if (metadata.reasoningEffort !== undefined) runtime.reasoningEffort = metadata.reasoningEffort;
+  if (metadata.permissionMode !== undefined) runtime.permissionMode = metadata.permissionMode;
   if (metadata.sandbox !== undefined) runtime.sandbox = metadata.sandbox;
   if (metadata.cwd || thread.cwd) runtime.cwd = metadata.cwd || thread.cwd;
   if (metadata.model || thread.model) runtime.model = metadata.model || thread.model;
+  if (thread.permissionMode) runtime.permissionMode = thread.permissionMode;
   state.threadRuntime.set(thread.id, runtime);
   syncThreadActivity(thread);
   markThreadSeen(thread.id);
   elements.threadTitle.textContent = threadDisplayTitle(thread);
   const cwd = metadata.cwd || thread.cwd || state.settings.cwd;
   const model = metadata.model || thread.model || "";
-  elements.threadMeta.textContent = [cwd, model].filter(Boolean).join("  ·  ");
+  elements.threadMeta.textContent = [
+    providerLabel(thread.provider || providerForThread(thread.id)),
+    cwd,
+    model,
+  ]
+    .filter(Boolean)
+    .join("  ·  ");
   elements.welcome.classList.add("hidden");
   restoreDraft(thread.id);
   renderThreadList();
   activateThreadInteractions(thread.id);
+  updateConnection();
 }
 
 function itemText(item) {
@@ -1807,42 +2134,58 @@ function renderHistory(thread) {
   scheduleScrollToBottom(true);
 }
 
-async function openThread(threadId) {
-  if (!threadId) return;
+async function openThread(threadId, { historyMode = "push" } = {}) {
+  if (!threadId) return false;
   if (!state.currentThreadId && imageUploadsForDraft() > 0) {
     toast("برای حفظ تصاویر این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
-    return;
+    if (historyMode === "none") restoreCurrentViewUrl();
+    return false;
   }
   const navigationVersion = ++state.navigationVersion;
   if (threadId === state.currentThreadId) {
+    state.openingThreadId = null;
+    updateThreadUrl(threadId, historyMode);
     setNavigating(false);
     markThreadSeen(threadId);
     renderThreadList();
     activateThreadInteractions(threadId);
+    updateConnection();
     closeSidebar();
-    return;
+    return true;
   }
   saveCurrentDraft();
   closeInteractionDialogs();
+  state.openingThreadId = threadId;
   setNavigating(true);
   state.threadEventBacklog.set(threadId, []);
   try {
     elements.threadTitle.textContent = "در حال باز کردن…";
     const result = await rpc("thread/resume", { threadId });
-    if (navigationVersion !== state.navigationVersion) return;
+    if (navigationVersion !== state.navigationVersion) return false;
     setCurrentThread(result.thread, result);
     renderHistory(result.thread);
-    flushThreadEventBacklog(threadId);
+    flushThreadEventBacklog(result.thread.id);
+    updateThreadUrl(result.thread.id, historyMode);
+    state.openingThreadId = null;
     setNavigating(false);
+    updateConnection();
     closeSidebar();
     elements.prompt.focus();
+    return true;
   } catch (error) {
-    if (navigationVersion !== state.navigationVersion) return;
+    if (navigationVersion !== state.navigationVersion) return false;
     showError(error, "باز کردن گفتگو");
+    state.openingThreadId = null;
     setNavigating(false);
     elements.threadTitle.textContent = state.currentThread
       ? threadDisplayTitle(state.currentThread)
       : "گفتگوی تازه";
+    if (historyMode === "none") restoreCurrentViewUrl();
+    updateConnection();
+    return false;
+  } finally {
+    if (state.openingThreadId === threadId) state.openingThreadId = null;
+    updateConnection();
   }
 }
 
@@ -2104,6 +2447,7 @@ function renderPlan(params) {
     status.textContent =
       step.status === "completed" ? "✓" : step.status === "in_progress" ? "◉" : "○";
     const text = document.createElement("span");
+    text.className = "plan-step-text";
     text.dir = "auto";
     text.textContent = step.step;
     item.append(status, text);
@@ -2116,11 +2460,18 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
   if (sourceThreadId) return sourceThreadId;
   const params = {
     cwd: state.settings.cwd,
+    provider: state.settings.provider,
   };
-  if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
-  if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
-  if (state.settings.model) params.model = state.settings.model;
-  if (state.settings.personality) params.personality = state.settings.personality;
+  if (state.settings.provider === "codex") {
+    if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
+    if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
+    if (state.settings.personality) params.personality = state.settings.personality;
+  }
+  const model = state.settings.modelByProvider[state.settings.provider] || "";
+  if (model) params.model = model;
+  if (state.settings.provider === "claude" && state.settings.claudePermissionMode) {
+    params.permissionMode = state.settings.claudePermissionMode;
+  }
   const result = await rpc("thread/start", params);
   state.threadsRefreshVersion += 1;
   if (!state.threads.some((thread) => thread.id === result.thread.id)) {
@@ -2137,6 +2488,7 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
     draftKey() === sourceDraftKey
   ) {
     setCurrentThread(result.thread, result);
+    updateThreadUrl(result.thread.id, "replace");
   } else {
     renderThreadList();
   }
@@ -2189,12 +2541,22 @@ async function sendPrompt(text = elements.prompt.value) {
       sourceDraftKey,
     );
     targetThreadId = threadId;
+    const provider =
+      state.currentThreadId === threadId && state.currentThread?.provider
+        ? state.currentThread.provider
+        : providerForThread(threadId);
     const params = {
       clientUserMessageId,
       input,
       threadId,
+      provider,
     };
-    if (state.settings.effort) params.effort = state.settings.effort;
+    if (
+      state.settings.effort &&
+      (provider === "codex" || CLAUDE_EFFORTS.has(state.settings.effort))
+    ) {
+      params.effort = state.settings.effort;
+    }
     const result = await rpc("turn/start", params);
     settleOptimisticUserMessage(clientUserMessageId);
     const completedBeforeResponse = state.completedTurns.has(
@@ -2253,6 +2615,8 @@ async function stopTurn() {
     await rpc("turn/interrupt", {
       threadId,
       turnId,
+      provider:
+        state.currentThread?.provider || providerForThread(threadId),
     });
   } catch (error) {
     showError(error, "توقف پاسخ");
@@ -3104,11 +3468,14 @@ function connectEvents() {
   state.eventSource = events;
   events.addEventListener("status", (event) => {
     const data = JSON.parse(event.data);
-    updateConnection(Boolean(data.ready), data.message);
-    if (data.ready) {
+    const changed = applyProviderStatusPayload(data);
+    void hydrateThreadFromUrl();
+    if (data.providers || (changed && data.ready)) {
       const refreshes = [refreshThreads()];
-      if (!state.models.length) refreshes.push(loadModels());
-      Promise.allSettled(refreshes);
+      if (!(state.modelsByProvider[state.settings.provider] || []).length) {
+        refreshes.push(loadModels());
+      }
+      void Promise.allSettled(refreshes);
     }
   });
   events.addEventListener("rpc", (event) => {
@@ -3140,25 +3507,65 @@ function connectEvents() {
     const data = JSON.parse(event.data);
     console.debug("[codex app-server]", data.message);
   });
-  events.onerror = () => updateConnection(false, "در حال اتصال دوباره…");
+  events.onerror = () => markProviderConnectionsUnavailable("در حال اتصال دوباره…");
 }
 
-async function loadModels() {
+function renderModelOptions(
+  models,
+  selectedModel = "",
+  provider = elements.providerSelect.value || state.settings.provider,
+) {
+  const defaultOption = elements.modelSelect.querySelector("option:first-child");
+  if (defaultOption) defaultOption.textContent = `پیش‌فرض ${providerLabel(provider)}`;
+  elements.modelSelect.querySelectorAll("option:not(:first-child)").forEach((node) => node.remove());
+  for (const model of models) {
+    const option = document.createElement("option");
+    option.value = model.model || model.id;
+    option.textContent = `${model.displayName}${model.isDefault ? " — پیش‌فرض" : ""}`;
+    elements.modelSelect.append(option);
+  }
+  elements.modelSelect.value = models.some(
+    (model) => (model.model || model.id) === selectedModel,
+  )
+    ? selectedModel
+    : "";
+}
+
+async function loadModels(provider = state.settings.provider) {
   try {
-    const result = await rpc("model/list", { limit: 100 });
-    state.models = (result.data || []).filter((model) => !model.hidden);
-    const selected = elements.modelSelect.value;
-    elements.modelSelect.querySelectorAll("option:not(:first-child)").forEach((node) => node.remove());
-    for (const model of state.models) {
-      const option = document.createElement("option");
-      option.value = model.model || model.id;
-      option.textContent = `${model.displayName}${model.isDefault ? " — پیش‌فرض" : ""}`;
-      elements.modelSelect.append(option);
+    const result = await rpc("model/list", { limit: 100, provider });
+    const models = (result.data || []).filter((model) => !model.hidden);
+    state.modelsByProvider[provider] = models;
+    const selectedModel = state.settings.modelByProvider[provider] || "";
+    if (
+      provider === state.settings.provider &&
+      selectedModel &&
+      !models.some((model) => (model.model || model.id) === selectedModel)
+    ) {
+      state.settings.modelByProvider[provider] = "";
+      persistSettings();
     }
-    elements.modelSelect.value = selected || state.settings.model;
-    updateSettingsUi();
+    if (provider === elements.providerSelect.value) {
+      state.models = models;
+      renderModelOptions(
+        models,
+        state.settings.modelByProvider[provider] || "",
+        provider,
+      );
+      if (provider === state.settings.provider) updateModelLabel(provider);
+    }
   } catch (error) {
-    console.warn("Could not load models", error);
+    console.warn(`Could not load ${provider} models`, error);
+  }
+}
+
+async function refreshProviderStatus() {
+  try {
+    const status = await api("/api/status", { headers: {} });
+    applyProviderStatusPayload(status);
+  } catch (error) {
+    markProviderConnectionsUnavailable("سرور در دسترس نیست");
+    console.warn("Could not refresh provider status", error);
   }
 }
 
@@ -3272,7 +3679,7 @@ elements.sendMessage.addEventListener("click", () => {
   }
 });
 elements.stopTurn.addEventListener("click", stopTurn);
-elements.newChat.addEventListener("click", newChat);
+elements.newChat.addEventListener("click", () => newChat());
 elements.threadList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-thread-id]");
   if (button) openThread(button.dataset.threadId);
@@ -3281,9 +3688,9 @@ elements.threadSearch.addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => refreshThreads(), 250);
 });
-elements.openSettings.addEventListener("click", openSettings);
-elements.headerSettings.addEventListener("click", openSettings);
-elements.cwdChip.addEventListener("click", openSettings);
+elements.openSettings.addEventListener("click", () => openSettings());
+elements.headerSettings.addEventListener("click", () => openSettings());
+elements.cwdChip.addEventListener("click", () => openSettings());
 elements.saveSettings.addEventListener("click", (event) => {
   event.preventDefault();
   saveSettings();
@@ -3291,12 +3698,24 @@ elements.saveSettings.addEventListener("click", (event) => {
 elements.settingsForm.addEventListener("submit", (event) => event.preventDefault());
 elements.settingsCancel.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsClose.addEventListener("click", () => elements.settingsDialog.close());
-elements.sandboxSelect.addEventListener("change", () => {
-  elements.fullAccessWarning.classList.toggle(
-    "visible",
-    elements.sandboxSelect.value === "danger-full-access",
+elements.settingsDialog.addEventListener("close", updateSettingsUi);
+elements.providerSelect.addEventListener("change", () => {
+  const provider = elements.providerSelect.value;
+  updateSettingsProviderUi(provider);
+  const cachedModels = state.modelsByProvider[provider] || [];
+  renderModelOptions(
+    cachedModels,
+    state.settings.modelByProvider[provider] || "",
+    provider,
   );
+  void loadModels(provider);
 });
+elements.claudePermissionMode.addEventListener("change", () =>
+  updateFullAccessWarning(elements.providerSelect.value),
+);
+elements.sandboxSelect.addEventListener("change", () =>
+  updateFullAccessWarning(elements.providerSelect.value),
+);
 elements.menuButton.addEventListener("click", openSidebar);
 elements.sidebarClose.addEventListener("click", closeSidebar);
 elements.mobileScrim.addEventListener("click", closeSidebar);
@@ -3331,6 +3750,15 @@ document.addEventListener("keydown", primeCompletionAudio, {
 window.addEventListener("resize", scheduleUserMessageNavigationUpdate, {
   passive: true,
 });
+window.addEventListener("popstate", (event) => {
+  void hydrateThreadFromUrl({
+    draftId:
+      typeof event.state?.draftId === "string" && event.state.draftId
+        ? event.state.draftId
+        : null,
+    force: true,
+  });
+});
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.currentThreadId) {
     markThreadSeen(state.currentThreadId);
@@ -3360,6 +3788,7 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 
 async function initialize() {
   updateSettingsUi();
+  updateConnection();
   resizePrompt();
   connectEvents();
   try {
@@ -3369,10 +3798,10 @@ async function initialize() {
       persistSettings();
       updateSettingsUi();
     }
-    updateConnection(status.ready, status.ready ? "" : "در حال راه‌اندازی Codex…");
-    if (status.ready) await Promise.allSettled([loadModels(), refreshThreads()]);
+    applyProviderStatusPayload(status);
+    await Promise.allSettled([loadModels(), refreshThreads(), hydrateThreadFromUrl()]);
   } catch (error) {
-    updateConnection(false, "سرور در دسترس نیست");
+    markProviderConnectionsUnavailable("سرور در دسترس نیست");
     showError(error, "اتصال به سرور");
   }
 }

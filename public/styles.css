@@ -271,6 +271,20 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.thread-provider {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  color: var(--muted);
+  background: rgb(154 163 151 / 0.06);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  direction: ltr;
+  font-family: var(--mono);
+  font-size: 0.67rem;
+  line-height: 1.4;
+  unicode-bidi: isolate;
+}
+
 .thread-activity {
   display: inline-flex;
   min-height: 19px;
@@ -1043,12 +1057,23 @@ textarea:focus-visible {
 
 .plan-list li {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   align-items: baseline;
   gap: 8px;
 }
 
 .plan-status {
+  flex: 0 0 auto;
   font-family: var(--mono);
+}
+
+.plan-step-text {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .plan-status.completed {
@@ -1627,6 +1652,18 @@ dialog form,
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.claude-only-setting {
+  display: none;
+}
+
+.settings-dialog[data-provider="claude"] .codex-only-setting {
+  display: none;
+}
+
+.settings-dialog[data-provider="claude"] .claude-only-setting {
+  display: grid;
 }
 
 .warning-box {
