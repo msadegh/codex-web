@@ -91,8 +91,8 @@
         <section class="conversation" id="conversation" aria-live="polite">
           <div class="welcome" id="welcome">
             <div class="welcome-mark">C</div>
-            <h2>چه کاری روی کد انجام دهیم؟</h2>
-            <p>
+            <h2 id="welcome-title">چه کاری روی کد انجام دهیم؟</h2>
+            <p id="welcome-description">
               پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها،
               MCPها و دسترسی‌های ترمینال شما.
             </p>
@@ -156,8 +156,8 @@
               id="prompt"
               rows="1"
               dir="auto"
-              placeholder="پیام به agent…"
-              aria-label="پیام به agent"
+              placeholder="پیام به Codex…"
+              aria-label="پیام به Codex"
               role="combobox"
               aria-autocomplete="list"
               aria-controls="slash-command-menu"
@@ -204,7 +204,7 @@
     <div class="mobile-scrim" id="mobile-scrim"></div>
     <div class="toast-region" id="toasts" aria-live="assertive"></div>
 
-    <dialog class="settings-dialog" id="settings-dialog">
+    <dialog class="settings-dialog" id="settings-dialog" data-provider="codex">
       <form method="dialog" id="settings-form">
         <div class="dialog-header">
           <div>
@@ -215,7 +215,7 @@
         </div>
 
         <label class="field">
-          <span>Agent</span>
+          <span>Agent / ارائه‌دهنده</span>
           <select id="provider-select">
             <option value="codex">Codex CLI</option>
             <option value="claude">Claude Code CLI</option>
@@ -233,7 +233,7 @@
           <label class="field">
             <span>مدل</span>
             <select id="model-select">
-              <option value="">پیش‌فرض Codex</option>
+              <option value="" id="default-model-option">پیش‌فرض Codex</option>
             </select>
           </label>
           <label class="field">
@@ -250,7 +250,7 @@
           </label>
         </div>
 
-        <div class="field-grid">
+        <div class="field-grid codex-only-setting">
           <label class="field">
             <span>دسترسی فایل‌ها</span>
             <select id="sandbox-select">
@@ -271,7 +271,7 @@
           </label>
         </div>
 
-        <label class="field">
+        <label class="field codex-only-setting">
           <span>لحن پاسخ</span>
           <select id="personality-select">
             <option value="">پیش‌فرض</option>
@@ -281,15 +281,15 @@
           </select>
         </label>
 
-        <label class="field" id="claude-permission-field">
+        <label class="field claude-only-setting" id="claude-permission-field">
           <span>مجوزهای Claude</span>
           <select id="claude-permission-mode">
-            <option value="acceptEdits">ویرایش فایل‌ها، تأیید ابزارهای حساس</option>
+            <option value="acceptEdits">ویرایش فایل‌ها مجاز؛ ابزارهای تأییدنشده رد می‌شوند</option>
             <option value="plan">فقط برنامه‌ریزی</option>
-            <option value="dontAsk">بدون پرسش برای مجوز</option>
+            <option value="dontAsk">رد خودکار ابزارهای تأییدنشده</option>
             <option value="bypassPermissions">دسترسی کامل (خطرناک)</option>
           </select>
-          <small>این گزینه مستقیماً به Claude Code CLI ارسال می‌شود.</small>
+          <small>در حالت --print سؤال تعاملی نمایش داده نمی‌شود؛ این گزینه مستقیماً به Claude Code CLI ارسال می‌شود.</small>
         </label>
 
         <div class="warning-box" id="full-access-warning">

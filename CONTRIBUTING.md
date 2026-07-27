@@ -12,8 +12,9 @@ Thanks for helping improve Codex Web.
    npm test
    ```
 
-4. Do not commit API keys, Codex credentials, uploaded images, or private
-   conversation data.
+4. Do not commit API keys, Codex or Claude credentials, uploaded images, or
+   private conversation data.
 
-The Codex app-server protocol is experimental, so compatibility changes should
-state the Codex CLI version used for testing.
+The Codex app-server protocol and Claude Code's stream/session formats may
+change, so compatibility changes should state the Codex CLI and Claude Code CLI
+versions used for testing.

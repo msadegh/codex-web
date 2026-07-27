@@ -48,7 +48,7 @@ Environment:
   CODEX_WEB_UPLOAD_DIR      Image upload cache directory
   CODEX_BIN                 Codex executable (default: codex)
   CLAUDE_BIN                Claude Code executable (default: claude)
-  CLAUDE_HOME               Claude Code home directory (default: ~/.claude)
+  CLAUDE_CONFIG_DIR         Claude Code config/session directory (default: ~/.claude)
   CLAUDE_WEB_DATA_DIR       Claude Web conversation metadata directory`);
   process.exit(0);
 }
@@ -57,7 +57,11 @@ const HOST = "127.0.0.1";
 const PORT = parsePort(process.env.CODEX_WEB_PORT ?? "4173");
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
-const CLAUDE_HOME = resolve(process.env.CLAUDE_HOME || join(os.homedir(), ".claude"));
+const CLAUDE_CONFIG_DIR = resolve(
+  process.env.CLAUDE_CONFIG_DIR ||
+    process.env.CLAUDE_HOME ||
+    join(os.homedir(), ".claude"),
+);
 const DEFAULT_CWD = process.env.CODEX_WEB_CWD || process.cwd();
 const WEB_ARGS = new Set(["--no-open", "--help", "-h", "--version", "-V"]);
 const RAW_CODEX_ARGS = process.argv.slice(2).filter((arg) => !WEB_ARGS.has(arg));
@@ -527,7 +531,11 @@ class CodexBridge {
       });
       this.notify("initialized", {});
       this.ready = true;
-      broadcast("status", { ready: true, message: "Codex app-server connected" });
+      broadcast("status", {
+        ready: true,
+        message: "Codex app-server connected",
+        provider: "codex",
+      });
     } catch (error) {
       if (this.proc === proc) {
         this.proc = null;
@@ -617,7 +625,11 @@ class CodexBridge {
     this.pending.clear();
     pendingServerRequests.clear();
     broadcast("pending-interactions", { requests: [] });
-    broadcast("status", { ready: false, message: error.message });
+    broadcast("status", {
+      ready: false,
+      message: error.message,
+      provider: "codex",
+    });
   }
 
   write(message) {
@@ -677,7 +689,7 @@ const bridge = new CodexBridge();
 const claudeProvider = new ClaudeProvider({
   binary: CLAUDE_BIN,
   cacheDir: CLAUDE_DATA_DIR,
-  claudeHome: CLAUDE_HOME,
+  claudeConfigDir: CLAUDE_CONFIG_DIR,
   emit: (message) => broadcast("rpc", message),
   log: (message) => broadcast("log", { level: "stderr", message }),
 });
@@ -925,13 +937,27 @@ const heartbeat = setInterval(() => {
 }, 20_000);
 heartbeat.unref();
 
-function shutdown() {
+let shuttingDown = false;
+
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   clearInterval(heartbeat);
+  const forceExit = setTimeout(() => process.exit(0), 3_500);
+  forceExit.unref();
+  const serverClosed = new Promise((resolveClosed) => {
+    server.close(resolveClosed);
+  });
+  for (const client of clients) client.end();
+  clients.clear();
+  server.closeIdleConnections?.();
+  server.closeAllConnections?.();
   bridge.stop();
-  claudeProvider.stop();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 1500).unref();
+  await claudeProvider.stop();
+  await serverClosed;
+  clearTimeout(forceExit);
+  process.exit(0);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());
