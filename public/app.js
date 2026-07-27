@@ -1559,7 +1559,10 @@ function restoreDraft(threadId = state.currentThreadId) {
 
 function threadIdFromUrl() {
   if (!window.location?.href) return "";
-  return new URL(window.location.href).searchParams.get("thread") || "";
+  const searchParams = new URL(window.location.href).searchParams;
+  // app-server calls this value threadId; the user-facing URL calls it a session.
+  const sessionId = searchParams.get("session");
+  return sessionId !== null ? sessionId : searchParams.get("thread") || "";
 }
 
 function historyStateMatches(stateValue) {
@@ -1573,15 +1576,22 @@ function historyStateMatches(stateValue) {
 function updateThreadUrl(threadId, mode = "push", draftId = state.newDraftId) {
   if (!window.location?.href || !window.history) return;
   const url = new URL(window.location.href);
-  const current = url.searchParams.get("thread") || "";
-  if (threadId) url.searchParams.set("thread", threadId);
-  else url.searchParams.delete("thread");
   const target = threadId || "";
+  const current = threadIdFromUrl();
+  const currentSessionIds = url.searchParams.getAll("session");
+  const canonicalUrlMatches =
+    !url.searchParams.has("thread") &&
+    (target
+      ? currentSessionIds.length === 1 && currentSessionIds[0] === target
+      : currentSessionIds.length === 0);
+  const sameTarget = current === target;
+  if (mode === "none" && !sameTarget) return;
+  if (threadId) url.searchParams.set("session", threadId);
+  else url.searchParams.delete("session");
+  url.searchParams.delete("thread");
   const stateValue = threadId ? { threadId } : { draftId };
-  const sameUrl = current === target;
-  if (mode === "none" && !sameUrl) return;
-  if (sameUrl && historyStateMatches(stateValue)) return;
-  if (mode === "none" || sameUrl) mode = "replace";
+  if (canonicalUrlMatches && historyStateMatches(stateValue)) return;
+  if (mode === "none" || sameTarget) mode = "replace";
   const method = mode === "replace" ? "replaceState" : "pushState";
   if (typeof window.history[method] !== "function") return;
   window.history[method](stateValue, "", `${url.pathname}${url.search}${url.hash}`);

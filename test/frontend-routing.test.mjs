@@ -307,9 +307,10 @@ test(
       throw new Error(`Unexpected RPC method: ${request.method}`);
     };
 
-    const { window } = await createHarness(t, {
+    const { history, window } = await createHarness(t, {
       fetchHandler,
-      initialUrl: "http://localhost/?thread=codex-deep-link",
+      initialUrl:
+        "http://localhost/?view=compact&thread=codex-deep-link#latest-message",
       savedSettings: {
         cwd: "/workspace",
         modelByProvider: { claude: "", codex: "" },
@@ -331,6 +332,12 @@ test(
       ),
       true,
     );
+    const canonicalUrl = new URL(window.location.href);
+    assert.equal(canonicalUrl.searchParams.get("session"), "codex-deep-link");
+    assert.equal(canonicalUrl.searchParams.get("thread"), null);
+    assert.equal(canonicalUrl.searchParams.get("view"), "compact");
+    assert.equal(canonicalUrl.hash, "#latest-message");
+    assert.equal(history.length, 1);
     assert.equal(
       window.document.querySelector("#connection-label").textContent,
       "Codex متصل است",
@@ -360,7 +367,82 @@ test(
 );
 
 test(
-  "new threads replace their draft URL and browser history restores the matching draft",
+  "session takes precedence over a legacy thread parameter and canonicalization preserves the URL",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const threads = new Map(
+      [
+        ["preferred-session", "Preferred session"],
+        ["legacy-thread", "Legacy thread"],
+      ].map(([id, name]) => [
+        id,
+        {
+          id,
+          name,
+          cwd: "/workspace",
+          createdAt: now,
+          updatedAt: now,
+          status: { type: "idle" },
+          turns: [],
+        },
+      ]),
+    );
+    const resumed = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") {
+        return jsonResponse({
+          cwd: "/workspace",
+          providers: {
+            claude: { ready: true },
+            codex: { ready: true },
+          },
+          ready: true,
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({
+          result: { data: [...threads.values()], nextCursor: null },
+        });
+      }
+      if (request.method === "thread/resume") {
+        resumed.push(request.params.threadId);
+        const thread = threads.get(request.params.threadId);
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { history, window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl:
+        "http://localhost/?thread=legacy-thread&filter=active&session=preferred-session#turn",
+    });
+
+    await waitFor(
+      () =>
+        window.document.querySelector("#thread-title").textContent ===
+        "Preferred session",
+      "the canonical session parameter did not take precedence",
+    );
+    assert.deepEqual(resumed, ["preferred-session"]);
+    const canonicalUrl = new URL(window.location.href);
+    assert.equal(canonicalUrl.searchParams.get("session"), "preferred-session");
+    assert.equal(canonicalUrl.searchParams.get("thread"), null);
+    assert.equal(canonicalUrl.searchParams.get("filter"), "active");
+    assert.equal(canonicalUrl.hash, "#turn");
+    assert.equal(history.length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "new sessions replace their draft URL and Back/Forward restore the matching draft",
   { concurrency: false },
   async (t) => {
     const now = Math.floor(Date.now() / 1000);
@@ -413,7 +495,10 @@ test(
       throw new Error(`Unexpected RPC method: ${method}`);
     };
 
-    const { history, window } = await createHarness(t, { fetchHandler });
+    const { history, window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?layout=wide#composer",
+    });
     await waitFor(
       () => typeof history.state?.draftId === "string",
       "initial draft history state was not installed",
@@ -427,24 +512,42 @@ test(
     );
     window.document.querySelector("[data-thread-id='old-thread']").click();
     await waitFor(
-      () => new URL(window.location.href).searchParams.get("thread") === "old-thread",
-      "opening an existing thread did not push its URL",
+      () => new URL(window.location.href).searchParams.get("session") === "old-thread",
+      "opening an existing session did not push its URL",
     );
     history.back();
     await waitFor(
       () =>
-        new URL(window.location.href).searchParams.get("thread") === null &&
+        new URL(window.location.href).searchParams.get("session") === null &&
         prompt.value === "پیش‌نویس حفظ‌شونده",
       "browser Back did not restore the draft belonging to its history entry",
     );
     assert.equal(history.state.draftId, draftId);
+    history.forward();
+    await waitFor(
+      () =>
+        new URL(window.location.href).searchParams.get("session") === "old-thread" &&
+        window.document.querySelector("#thread-title").textContent === "Old thread",
+      "browser Forward did not restore the existing session",
+    );
+    history.back();
+    await waitFor(
+      () =>
+        new URL(window.location.href).searchParams.get("session") === null &&
+        prompt.value === "پیش‌نویس حفظ‌شونده",
+      "browser Back did not restore the draft after a Forward navigation",
+    );
 
     window.document.querySelector("#send-message").click();
     await waitFor(
-      () => new URL(window.location.href).searchParams.get("thread") === "new-thread",
-      "the first message did not replace the draft URL with the created thread",
+      () => new URL(window.location.href).searchParams.get("session") === "new-thread",
+      "the first message did not replace the draft URL with the created session",
     );
     assert.deepEqual(history.state, { threadId: "new-thread" });
+    const finalUrl = new URL(window.location.href);
+    assert.equal(finalUrl.searchParams.get("thread"), null);
+    assert.equal(finalUrl.searchParams.get("layout"), "wide");
+    assert.equal(finalUrl.hash, "#composer");
   },
 );
 
@@ -512,7 +615,7 @@ test(
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     function navigateTo(threadId) {
-      history.pushState({ threadId }, "", `/?thread=${threadId}`);
+      history.pushState({ threadId }, "", `/?session=${threadId}`);
       const event = new window.Event("popstate");
       Object.defineProperty(event, "state", {
         configurable: true,
@@ -550,7 +653,7 @@ test(
     assert.equal(resumeCounts.get("race-a"), 1);
     assert.equal(resumeCounts.get("race-b"), 1);
     assert.equal(
-      new URL(window.location.href).searchParams.get("thread"),
+      new URL(window.location.href).searchParams.get("session"),
       "race-b",
     );
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -690,7 +793,7 @@ test(
 
     const { window } = await createHarness(t, {
       fetchHandler,
-      initialUrl: "http://localhost/?thread=claude%3Aslash-thread",
+      initialUrl: "http://localhost/?session=claude%3Aslash-thread",
     });
     await waitFor(
       () => window.document.querySelector("#thread-title").textContent === "Claude slash",

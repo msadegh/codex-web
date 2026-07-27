@@ -296,10 +296,12 @@ The up/down buttons in the conversation header jump between your messages.
 Completion audio requires one click or key press on the page before browsers
 allow sound.
 
-Opening a conversation stores its ID in the local `?thread=` URL. Refreshing
-the page or using browser Back and Forward restores that selection. A thread ID
-is not an authentication token and does not make the localhost-only server
-remotely accessible.
+Opening a conversation stores its ID in the user-facing `?session=` URL.
+Refreshing the page or using browser Back and Forward restores that selection.
+Legacy `?thread=` links remain valid and are automatically replaced with the
+new parameter. The value maps to the provider conversation—called a thread
+inside the Codex app-server—and is not an authentication token or a way around
+the localhost-only server boundary.
 
 ## Run on a remote server
 
