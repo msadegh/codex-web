@@ -414,6 +414,10 @@ export class ClaudeProvider {
       startedAt: nowSeconds(),
     };
     const userItem = {
+      clientId:
+        typeof params.clientUserMessageId === "string" && params.clientUserMessageId
+          ? params.clientUserMessageId
+          : null,
       id: `${turn.id}:user`,
       type: "userMessage",
       content: [{ type: "text", text }],

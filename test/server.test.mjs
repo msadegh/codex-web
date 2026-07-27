@@ -328,18 +328,25 @@ test("Claude provider supports sessions, streaming, resume, and merged thread li
   const threadId = started.thread.id;
   assert.match(threadId, /^claude:/);
 
+  const firstClientUserMessageId = "claude-client-message-1";
   const firstTurn = await rpc("turn/start", {
     provider: "claude",
     threadId,
+    clientUserMessageId: firstClientUserMessageId,
     input: [{ type: "text", text: "سلام" }],
   });
   assert.equal(firstTurn.turn.status, "inProgress");
+  assert.equal(firstTurn.turn.items[0].clientId, firstClientUserMessageId);
 
   const firstRead = await waitFor(async () => {
     const result = await rpc("thread/read", { provider: "claude", threadId });
     return result.thread.turns.at(-1)?.status === "completed" ? result : null;
   });
   assert.match(firstRead.thread.turns.at(-1).items.at(-1).text, /سلام/);
+  assert.equal(
+    firstRead.thread.turns.at(-1).items[0].clientId,
+    firstClientUserMessageId,
+  );
   const firstArgs = JSON.parse(await readFile(argsFile, "utf8"));
   assert.equal(firstArgs.includes("--session-id"), true);
   assert.equal(firstArgs.includes("--output-format"), true);
