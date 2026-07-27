@@ -1,6 +1,6 @@
 # Security policy
 
-Codex Web is a local control surface for Codex CLI. Anyone who can access it
+Codex Web is a local control surface for Codex CLI and Claude Code CLI. Anyone who can access it
 may be able to read project data, answer approval prompts, and cause commands
 to run with the permissions of the operating-system user that started it.
 
@@ -18,9 +18,13 @@ Security fixes are applied to the latest version on the default branch.
   OS/network isolation.
 - Treat `--yolo` / `--dangerously-bypass-approvals-and-sandbox` as equivalent
   to granting the agent broad access as the service user.
+- Treat Claude permission modes such as `bypassPermissions` and `dontAsk` as
+  equivalent to granting Claude broad access as the service user.
 - Prefer a dedicated, low-privilege user, container, or VM on remote machines.
 - Keep API keys and provider credentials in the server environment; never
   commit them to the repository.
+- Protect `CLAUDE_WEB_DATA_DIR` because it contains normalized Claude
+  conversation history, which may include source code and other sensitive data.
 
 Codex Web does not currently include web authentication, and this release
 rejects non-local Host/Origin values. Direct or public reverse-proxy deployment

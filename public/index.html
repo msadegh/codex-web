@@ -156,8 +156,8 @@
               id="prompt"
               rows="1"
               dir="auto"
-              placeholder="پیام به Codex…"
-              aria-label="پیام به Codex"
+              placeholder="پیام به agent…"
+              aria-label="پیام به agent"
               role="combobox"
               aria-autocomplete="list"
               aria-controls="slash-command-menu"
@@ -215,6 +215,15 @@
         </div>
 
         <label class="field">
+          <span>Agent</span>
+          <select id="provider-select">
+            <option value="codex">Codex CLI</option>
+            <option value="claude">Claude Code CLI</option>
+          </select>
+          <small>برای گفتگوی تازه استفاده می‌شود.</small>
+        </label>
+
+        <label class="field">
           <span>پوشه کاری</span>
           <input id="cwd-input" dir="ltr" spellcheck="false" autocomplete="off" />
           <small>مسیر باید absolute و موجود باشد.</small>
@@ -270,6 +279,17 @@
             <option value="pragmatic">Pragmatic</option>
             <option value="none">None</option>
           </select>
+        </label>
+
+        <label class="field" id="claude-permission-field">
+          <span>مجوزهای Claude</span>
+          <select id="claude-permission-mode">
+            <option value="acceptEdits">ویرایش فایل‌ها، تأیید ابزارهای حساس</option>
+            <option value="plan">فقط برنامه‌ریزی</option>
+            <option value="dontAsk">بدون پرسش برای مجوز</option>
+            <option value="bypassPermissions">دسترسی کامل (خطرناک)</option>
+          </select>
+          <small>این گزینه مستقیماً به Claude Code CLI ارسال می‌شود.</small>
         </label>
 
         <div class="warning-box" id="full-access-warning">

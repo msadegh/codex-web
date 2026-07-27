@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
+import { ClaudeProvider } from "./providers/claude-provider.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -45,13 +46,18 @@ Environment:
   CODEX_WEB_CWD             Default working directory (default: current directory)
   CODEX_WEB_NO_OPEN=1       Do not open a browser automatically
   CODEX_WEB_UPLOAD_DIR      Image upload cache directory
-  CODEX_BIN                 Codex executable (default: codex)`);
+  CODEX_BIN                 Codex executable (default: codex)
+  CLAUDE_BIN                Claude Code executable (default: claude)
+  CLAUDE_HOME               Claude Code home directory (default: ~/.claude)
+  CLAUDE_WEB_DATA_DIR       Claude Web conversation metadata directory`);
   process.exit(0);
 }
 
 const HOST = "127.0.0.1";
 const PORT = parsePort(process.env.CODEX_WEB_PORT ?? "4173");
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
+const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
+const CLAUDE_HOME = resolve(process.env.CLAUDE_HOME || join(os.homedir(), ".claude"));
 const DEFAULT_CWD = process.env.CODEX_WEB_CWD || process.cwd();
 const WEB_ARGS = new Set(["--no-open", "--help", "-h", "--version", "-V"]);
 const RAW_CODEX_ARGS = process.argv.slice(2).filter((arg) => !WEB_ARGS.has(arg));
@@ -66,6 +72,9 @@ const CACHE_HOME =
   join(os.homedir(), ".cache");
 const UPLOAD_DIR = resolve(
   process.env.CODEX_WEB_UPLOAD_DIR || join(CACHE_HOME, "codex-web", "uploads"),
+);
+const CLAUDE_DATA_DIR = resolve(
+  process.env.CLAUDE_WEB_DATA_DIR || join(CACHE_HOME, "codex-web", "claude"),
 );
 
 const IMAGE_TYPES = new Map([
@@ -665,6 +674,62 @@ class CodexBridge {
 }
 
 const bridge = new CodexBridge();
+const claudeProvider = new ClaudeProvider({
+  binary: CLAUDE_BIN,
+  cacheDir: CLAUDE_DATA_DIR,
+  claudeHome: CLAUDE_HOME,
+  emit: (message) => broadcast("rpc", message),
+  log: (message) => broadcast("log", { level: "stderr", message }),
+});
+
+function providerForRequest(method, params = {}) {
+  if (params.provider === "claude") return "claude";
+  if (params.provider === "codex") return "codex";
+  if (typeof params.threadId === "string" && params.threadId.startsWith("claude:")) {
+    return "claude";
+  }
+  return method === "thread/list" ? "all" : "codex";
+}
+
+function withoutProvider(params = {}) {
+  const copy = { ...params };
+  delete copy.provider;
+  return copy;
+}
+
+async function providerRpc(method, params = {}) {
+  const provider = providerForRequest(method, params);
+  if (provider === "claude") {
+    return claudeProvider.rpc(method, withoutProvider(params));
+  }
+  await bridge.start();
+  return bridge.rpc(method, applyCliThreadDefaults(method, withoutProvider(params)));
+}
+
+async function listAllThreads(params = {}) {
+  const results = await Promise.allSettled([
+    providerRpc("thread/list", { ...params, provider: "codex" }),
+    claudeProvider.rpc("thread/list", withoutProvider(params)),
+  ]);
+  const codex = results[0].status === "fulfilled" ? results[0].value : { data: [] };
+  const claude = results[1].status === "fulfilled" ? results[1].value : { data: [] };
+  if (results.every((result) => result.status === "rejected")) {
+    throw results[0].reason || results[1].reason;
+  }
+  return {
+    data: [
+      ...(codex.data || []).map((thread) => ({
+        ...thread,
+        provider: thread.provider || "codex",
+        providerThreadId: thread.providerThreadId || thread.id,
+      })),
+      ...(claude.data || []),
+    ].sort(
+      (left, right) => (right.updatedAt || 0) - (left.updatedAt || 0),
+    ),
+    nextCursor: null,
+  };
+}
 
 async function serveStatic(req, res, url) {
   const requestPath = url.pathname === "/" ? "/index.html" : url.pathname;
@@ -706,6 +771,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/events") {
+      const claudeStatus = await claudeProvider.status();
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
@@ -715,6 +781,10 @@ const server = createServer(async (req, res) => {
       res.write(`retry: 1000\nevent: status\ndata: ${JSON.stringify({
         ready: bridge.ready,
         message: bridge.ready ? "connected" : "starting",
+        providers: {
+          codex: { ready: bridge.ready, binary: CODEX_BIN },
+          claude: claudeStatus,
+        },
       })}\n\n`);
       res.write(
         ssePayload("pending-interactions", {
@@ -727,9 +797,15 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/status") {
+      const claudeStatus = await claudeProvider.status();
       return json(res, 200, {
         ready: bridge.ready,
         codexBin: CODEX_BIN,
+        claudeBin: CLAUDE_BIN,
+        providers: {
+          codex: { ready: bridge.ready, binary: CODEX_BIN },
+          claude: claudeStatus,
+        },
         cwd: DEFAULT_CWD,
         port: PORT,
       });
@@ -761,9 +837,12 @@ const server = createServer(async (req, res) => {
       if (!RPC_ALLOWLIST.has(body.method)) {
         return json(res, 403, { error: `RPC method is not allowed: ${body.method}` });
       }
-      await bridge.start();
       const params = applyCliThreadDefaults(body.method, body.params || {});
-      const result = await bridge.rpc(body.method, params);
+      const provider = providerForRequest(body.method, params);
+      const result =
+        body.method === "thread/list" && provider === "all"
+          ? await listAllThreads(params)
+          : await providerRpc(body.method, params);
       return json(res, 200, { result });
     }
 
@@ -849,6 +928,7 @@ heartbeat.unref();
 function shutdown() {
   clearInterval(heartbeat);
   bridge.stop();
+  claudeProvider.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();
 }

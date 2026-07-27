@@ -192,6 +192,9 @@ const elements = {
   nextUserMessage: $("#next-user-message"),
   openSettings: $("#open-settings"),
   personalitySelect: $("#personality-select"),
+  providerSelect: $("#provider-select"),
+  claudePermissionField: $("#claude-permission-field"),
+  claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
   prompt: $("#prompt"),
   sandboxSelect: $("#sandbox-select"),
@@ -221,14 +224,16 @@ const elements = {
 
 const defaultSettings = {
   approvalPolicy: "",
+  claudePermissionMode: "acceptEdits",
   cwd: "",
   effort: "",
-  model: "",
+  modelByProvider: { codex: "", claude: "" },
   personality: "",
+  provider: "codex",
   sandbox: "",
 };
 
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 4;
 
 const state = {
   activeInteractionKey: null,
@@ -245,7 +250,9 @@ const state = {
   itemViews: new Map(),
   navigationVersion: 0,
   models: [],
+  modelsByProvider: { codex: [], claude: [] },
   navigating: false,
+  openingThreadId: null,
   newDraftId: crypto.randomUUID(),
   notifiedTurns: new Set(),
   optimisticUserMessages: new Map(),
@@ -267,6 +274,7 @@ const state = {
   threadTokenUsage: new Map(),
   threads: [],
   threadsRefreshVersion: 0,
+  urlHydrated: false,
   userMessageHighlightTimer: null,
   userMessageNavigationFrame: null,
   userNavigationItemId: null,
@@ -275,25 +283,30 @@ const state = {
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("codex-web-settings") || "{}");
-    if (saved.version !== SETTINGS_VERSION) {
-      return {
-        ...defaultSettings,
-        cwd: saved.cwd || defaultSettings.cwd,
-        effort: saved.effort || "",
-        model: saved.model || "",
-        personality: saved.personality || "",
-      };
-    }
-    return { ...defaultSettings, ...saved };
+    const { model: legacyModel, modelByProvider: storedModels, ...savedSettings } = saved;
+    const modelByProvider = {
+      ...defaultSettings.modelByProvider,
+      ...(storedModels || {}),
+    };
+    if (!modelByProvider.codex && legacyModel) modelByProvider.codex = legacyModel;
+    return {
+      ...defaultSettings,
+      ...savedSettings,
+      claudePermissionMode:
+        savedSettings.claudePermissionMode || defaultSettings.claudePermissionMode,
+      modelByProvider,
+      provider: savedSettings.provider === "claude" ? "claude" : defaultSettings.provider,
+    };
   } catch {
     return { ...defaultSettings };
   }
 }
 
 function persistSettings() {
+  const { model, ...settings } = state.settings;
   localStorage.setItem(
     "codex-web-settings",
-    JSON.stringify({ ...state.settings, version: SETTINGS_VERSION }),
+    JSON.stringify({ ...settings, version: SETTINGS_VERSION }),
   );
 }
 
@@ -313,6 +326,12 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function providerForThread(threadId) {
+  return typeof threadId === "string" && threadId.startsWith("claude:")
+    ? "claude"
+    : "codex";
 }
 
 async function rpc(method, params = {}) {
@@ -926,7 +945,10 @@ function updateComposerControls() {
 function updateConnection(ready, message = "") {
   state.connected = ready;
   elements.statusDot.className = `status-dot ${ready ? "ready" : "starting"}`;
-  elements.connectionLabel.textContent = ready ? "Codex متصل است" : message || "در حال اتصال…";
+  const providerLabel = state.settings.provider === "claude" ? "Claude" : "Codex";
+  elements.connectionLabel.textContent = ready
+    ? `${providerLabel} متصل است`
+    : message || `در حال اتصال به ${providerLabel}…`;
   updateComposerControls();
 }
 
@@ -946,23 +968,30 @@ function setNavigating(navigating) {
 }
 
 function updateSettingsUi() {
+  state.models = state.modelsByProvider[state.settings.provider] || state.models;
+  const selectedModel = state.settings.modelByProvider[state.settings.provider] || "";
   elements.cwdInput.value = state.settings.cwd;
   elements.cwdLabel.textContent = shortPath(state.settings.cwd, 38);
   elements.cwdLabel.title = state.settings.cwd;
-  elements.modelSelect.value = state.settings.model;
+  elements.providerSelect.value = state.settings.provider;
+  elements.modelSelect.value = selectedModel;
   elements.effortSelect.value = state.settings.effort;
   elements.sandboxSelect.value = state.settings.sandbox;
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
+  elements.claudePermissionMode.value = state.settings.claudePermissionMode;
+  elements.claudePermissionField.classList.toggle("hidden", state.settings.provider !== "claude");
   elements.fullAccessWarning.classList.toggle(
     "visible",
-    state.settings.sandbox === "danger-full-access",
+    state.settings.sandbox === "danger-full-access" ||
+      (state.settings.provider === "claude" &&
+        state.settings.claudePermissionMode === "bypassPermissions"),
   );
   const model = state.models.find(
     (candidate) =>
-      candidate.id === state.settings.model || candidate.model === state.settings.model,
+      candidate.id === selectedModel || candidate.model === selectedModel,
   );
-  elements.modelLabel.textContent = model?.displayName || state.settings.model || "مدل پیش‌فرض";
+  elements.modelLabel.textContent = model?.displayName || selectedModel || "مدل پیش‌فرض";
 }
 
 function shortPath(path, length = 30) {
@@ -985,16 +1014,26 @@ function saveSettings() {
     toast("پوشه کاری باید با / شروع شود.", "error");
     return;
   }
+  const provider = elements.providerSelect.value;
   state.settings = {
     approvalPolicy: elements.approvalSelect.value,
+    claudePermissionMode: elements.claudePermissionMode.value,
     cwd,
     effort: elements.effortSelect.value,
-    model: elements.modelSelect.value,
+    modelByProvider: {
+      ...state.settings.modelByProvider,
+      [provider]: elements.modelSelect.value,
+    },
     personality: elements.personalitySelect.value,
+    provider,
     sandbox: elements.sandboxSelect.value,
   };
   persistSettings();
+  state.models = state.modelsByProvider[provider] || [];
   updateSettingsUi();
+  void loadModels();
+  void refreshThreads();
+  void refreshProviderStatus();
   elements.settingsDialog.close();
 }
 
@@ -1284,9 +1323,14 @@ function renderThreadList() {
     title.dir = "auto";
     title.textContent = threadDisplayTitle(thread);
 
+    const provider = document.createElement("span");
+    provider.className = "thread-provider";
+    provider.textContent = thread.provider === "claude" ? "Claude" : "Codex";
+    provider.title = thread.provider === "claude" ? "Claude Code CLI" : "Codex CLI";
+
     const heading = document.createElement("span");
     heading.className = "thread-item-heading";
-    heading.append(title);
+    heading.append(title, provider);
     const presentation = threadActivityPresentation(thread.id);
     if (presentation) {
       const activity = document.createElement("span");
@@ -1362,7 +1406,33 @@ function restoreDraft(threadId = state.currentThreadId) {
   resizePrompt();
 }
 
-function newChat() {
+function threadIdFromUrl() {
+  if (!window.location?.href) return "";
+  return new URL(window.location.href).searchParams.get("thread") || "";
+}
+
+function updateThreadUrl(threadId, mode = "push") {
+  if (mode === "none") return;
+  if (!window.location?.href || !window.history) return;
+  const url = new URL(window.location.href);
+  const current = url.searchParams.get("thread") || "";
+  if (threadId) url.searchParams.set("thread", threadId);
+  else url.searchParams.delete("thread");
+  if (current === (threadId || "")) return;
+  const stateValue = threadId ? { threadId } : {};
+  const method = mode === "replace" ? "replaceState" : "pushState";
+  if (typeof window.history[method] !== "function") return;
+  window.history[method](stateValue, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function hydrateThreadFromUrl() {
+  if (state.urlHydrated) return;
+  state.urlHydrated = true;
+  const threadId = threadIdFromUrl();
+  if (threadId) await openThread(threadId, { historyMode: "none" });
+}
+
+function newChat({ historyMode = "push" } = {}) {
   if (!state.currentThreadId && imageUploadsForDraft() > 0) {
     toast("برای حفظ تصاویر این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
     return;
@@ -1380,6 +1450,7 @@ function newChat() {
   elements.welcome.classList.remove("hidden");
   elements.threadTitle.textContent = "گفتگوی تازه";
   elements.threadMeta.textContent = "";
+  updateThreadUrl(null, historyMode);
   restoreDraft(null);
   renderThreadList();
   updateAttentionUi();
@@ -1807,7 +1878,7 @@ function renderHistory(thread) {
   scheduleScrollToBottom(true);
 }
 
-async function openThread(threadId) {
+async function openThread(threadId, { historyMode = "push" } = {}) {
   if (!threadId) return;
   if (!state.currentThreadId && imageUploadsForDraft() > 0) {
     toast("برای حفظ تصاویر این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
@@ -1815,6 +1886,7 @@ async function openThread(threadId) {
   }
   const navigationVersion = ++state.navigationVersion;
   if (threadId === state.currentThreadId) {
+    updateThreadUrl(threadId, historyMode);
     setNavigating(false);
     markThreadSeen(threadId);
     renderThreadList();
@@ -1825,6 +1897,7 @@ async function openThread(threadId) {
   saveCurrentDraft();
   closeInteractionDialogs();
   setNavigating(true);
+  state.openingThreadId = threadId;
   state.threadEventBacklog.set(threadId, []);
   try {
     elements.threadTitle.textContent = "در حال باز کردن…";
@@ -1833,6 +1906,7 @@ async function openThread(threadId) {
     setCurrentThread(result.thread, result);
     renderHistory(result.thread);
     flushThreadEventBacklog(threadId);
+    updateThreadUrl(threadId, historyMode);
     setNavigating(false);
     closeSidebar();
     elements.prompt.focus();
@@ -1843,6 +1917,8 @@ async function openThread(threadId) {
     elements.threadTitle.textContent = state.currentThread
       ? threadDisplayTitle(state.currentThread)
       : "گفتگوی تازه";
+  } finally {
+    if (state.openingThreadId === threadId) state.openingThreadId = null;
   }
 }
 
@@ -2116,11 +2192,16 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
   if (sourceThreadId) return sourceThreadId;
   const params = {
     cwd: state.settings.cwd,
+    provider: state.settings.provider,
   };
   if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
   if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
-  if (state.settings.model) params.model = state.settings.model;
+  const model = state.settings.modelByProvider[state.settings.provider] || "";
+  if (model) params.model = model;
   if (state.settings.personality) params.personality = state.settings.personality;
+  if (state.settings.provider === "claude" && state.settings.claudePermissionMode) {
+    params.permissionMode = state.settings.claudePermissionMode;
+  }
   const result = await rpc("thread/start", params);
   state.threadsRefreshVersion += 1;
   if (!state.threads.some((thread) => thread.id === result.thread.id)) {
@@ -2193,6 +2274,10 @@ async function sendPrompt(text = elements.prompt.value) {
       clientUserMessageId,
       input,
       threadId,
+      provider:
+        state.currentThreadId === threadId && state.currentThread?.provider
+          ? state.currentThread.provider
+          : providerForThread(threadId),
     };
     if (state.settings.effort) params.effort = state.settings.effort;
     const result = await rpc("turn/start", params);
@@ -2253,6 +2338,8 @@ async function stopTurn() {
     await rpc("turn/interrupt", {
       threadId,
       turnId,
+      provider:
+        state.currentThread?.provider || providerForThread(threadId),
     });
   } catch (error) {
     showError(error, "توقف پاسخ");
@@ -3104,11 +3191,13 @@ function connectEvents() {
   state.eventSource = events;
   events.addEventListener("status", (event) => {
     const data = JSON.parse(event.data);
-    updateConnection(Boolean(data.ready), data.message);
-    if (data.ready) {
+    const providerStatus = data.providers?.[state.settings.provider];
+    const ready = providerStatus ? Boolean(providerStatus.ready) : Boolean(data.ready);
+    updateConnection(ready, ready ? "" : data.message);
+    if (ready) {
       const refreshes = [refreshThreads()];
       if (!state.models.length) refreshes.push(loadModels());
-      Promise.allSettled(refreshes);
+      Promise.allSettled(refreshes).then(() => hydrateThreadFromUrl());
     }
   });
   events.addEventListener("rpc", (event) => {
@@ -3143,22 +3232,59 @@ function connectEvents() {
   events.onerror = () => updateConnection(false, "در حال اتصال دوباره…");
 }
 
-async function loadModels() {
+function renderModelOptions(models, selectedModel = "") {
+  elements.modelSelect.querySelectorAll("option:not(:first-child)").forEach((node) => node.remove());
+  for (const model of models) {
+    const option = document.createElement("option");
+    option.value = model.model || model.id;
+    option.textContent = `${model.displayName}${model.isDefault ? " — پیش‌فرض" : ""}`;
+    elements.modelSelect.append(option);
+  }
+  elements.modelSelect.value = models.some(
+    (model) => (model.model || model.id) === selectedModel,
+  )
+    ? selectedModel
+    : "";
+}
+
+async function loadModels(provider = state.settings.provider) {
   try {
-    const result = await rpc("model/list", { limit: 100 });
-    state.models = (result.data || []).filter((model) => !model.hidden);
-    const selected = elements.modelSelect.value;
-    elements.modelSelect.querySelectorAll("option:not(:first-child)").forEach((node) => node.remove());
-    for (const model of state.models) {
-      const option = document.createElement("option");
-      option.value = model.model || model.id;
-      option.textContent = `${model.displayName}${model.isDefault ? " — پیش‌فرض" : ""}`;
-      elements.modelSelect.append(option);
+    const result = await rpc("model/list", { limit: 100, provider });
+    const models = (result.data || []).filter((model) => !model.hidden);
+    state.modelsByProvider[provider] = models;
+    const selectedModel = state.settings.modelByProvider[provider] || "";
+    if (
+      provider === state.settings.provider &&
+      selectedModel &&
+      !models.some((model) => (model.model || model.id) === selectedModel)
+    ) {
+      state.settings.modelByProvider[provider] = "";
+      persistSettings();
     }
-    elements.modelSelect.value = selected || state.settings.model;
-    updateSettingsUi();
+    if (provider === elements.providerSelect.value) {
+      state.models = models;
+      renderModelOptions(
+        models,
+        state.settings.modelByProvider[provider] || "",
+      );
+      if (provider === state.settings.provider) updateSettingsUi();
+    }
   } catch (error) {
-    console.warn("Could not load models", error);
+    console.warn(`Could not load ${provider} models`, error);
+  }
+}
+
+async function refreshProviderStatus() {
+  try {
+    const status = await api("/api/status", { headers: {} });
+    const providerStatus = status.providers?.[state.settings.provider];
+    updateConnection(
+      providerStatus ? Boolean(providerStatus.ready) : Boolean(status.ready),
+      providerStatus?.message || "",
+    );
+  } catch (error) {
+    updateConnection(false, "سرور در دسترس نیست");
+    console.warn("Could not refresh provider status", error);
   }
 }
 
@@ -3291,6 +3417,30 @@ elements.saveSettings.addEventListener("click", (event) => {
 elements.settingsForm.addEventListener("submit", (event) => event.preventDefault());
 elements.settingsCancel.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsClose.addEventListener("click", () => elements.settingsDialog.close());
+elements.providerSelect.addEventListener("change", () => {
+  const provider = elements.providerSelect.value;
+  const isClaude = provider === "claude";
+  elements.claudePermissionField.classList.toggle("hidden", !isClaude);
+  elements.fullAccessWarning.classList.toggle(
+    "visible",
+    elements.sandboxSelect.value === "danger-full-access" ||
+      (isClaude && elements.claudePermissionMode.value === "bypassPermissions"),
+  );
+  const cachedModels = state.modelsByProvider[provider] || [];
+  renderModelOptions(
+    cachedModels,
+    state.settings.modelByProvider[provider] || "",
+  );
+  void loadModels(provider);
+});
+elements.claudePermissionMode.addEventListener("change", () => {
+  elements.fullAccessWarning.classList.toggle(
+    "visible",
+    elements.sandboxSelect.value === "danger-full-access" ||
+      (elements.providerSelect.value === "claude" &&
+        elements.claudePermissionMode.value === "bypassPermissions"),
+  );
+});
 elements.sandboxSelect.addEventListener("change", () => {
   elements.fullAccessWarning.classList.toggle(
     "visible",
@@ -3331,6 +3481,11 @@ document.addEventListener("keydown", primeCompletionAudio, {
 window.addEventListener("resize", scheduleUserMessageNavigationUpdate, {
   passive: true,
 });
+window.addEventListener("popstate", () => {
+  const threadId = threadIdFromUrl();
+  if (threadId) void openThread(threadId, { historyMode: "none" });
+  else newChat({ historyMode: "none" });
+});
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.currentThreadId) {
     markThreadSeen(state.currentThreadId);
@@ -3369,8 +3524,13 @@ async function initialize() {
       persistSettings();
       updateSettingsUi();
     }
-    updateConnection(status.ready, status.ready ? "" : "در حال راه‌اندازی Codex…");
-    if (status.ready) await Promise.allSettled([loadModels(), refreshThreads()]);
+    const providerStatus = status.providers?.[state.settings.provider];
+    const ready = providerStatus ? Boolean(providerStatus.ready) : Boolean(status.ready);
+    updateConnection(ready, ready ? "" : providerStatus?.message || "در حال اتصال…");
+    if (ready) {
+      await Promise.allSettled([loadModels(), refreshThreads()]);
+      await hydrateThreadFromUrl();
+    }
   } catch (error) {
     updateConnection(false, "سرور در دسترس نیست");
     showError(error, "اتصال به سرور");

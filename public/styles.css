@@ -271,6 +271,17 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.thread-provider {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  color: var(--muted-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  line-height: 1.35;
+}
+
 .thread-activity {
   display: inline-flex;
   min-height: 19px;

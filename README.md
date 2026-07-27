@@ -5,7 +5,8 @@
 [![CI](https://github.com/msadegh/codex-web/actions/workflows/ci.yml/badge.svg)](https://github.com/msadegh/codex-web/actions/workflows/ci.yml)
 
 An unofficial, local-first browser interface for the installed
-[Codex CLI](https://developers.openai.com/codex/cli/). Codex still runs on your
+[Codex CLI](https://developers.openai.com/codex/cli/) and Claude Code CLI.
+Codex or Claude still runs on your
 machine—or on a server you control—while the browser provides a chat interface
 that handles Persian, RTL, and mixed Persian/English text more comfortably than
 many terminals.
@@ -18,6 +19,8 @@ many terminals.
 
 - Reuses the installed Codex CLI login, configuration, top-level profile
   settings, skills, MCP servers, sessions, sandbox, and approval flow.
+- Connects to Claude Code CLI sessions with streaming output, model selection,
+  local conversation history, and Claude permission modes.
 - Runs multiple isolated Codex conversations concurrently in one browser tab.
 - Routes approval prompts and user-input questions to the correct conversation.
 - Streams answers, tool activity, plans, file changes, and command output.
@@ -56,7 +59,7 @@ See [SECURITY.md](SECURITY.md) before running Codex Web on a server.
   native Windows is not yet verified.
 - Node.js 22 or newer. Use a currently supported Node.js LTS release.
 - A recent Codex CLI release with the experimental `app-server` command.
-- A configured Codex login or provider profile.
+- A configured Codex login or provider profile, and optionally Claude Code CLI.
 
 The current release is tested with Codex CLI `0.145.0`; other recent versions
 may work, but the experimental app-server protocol can change. The included
@@ -67,6 +70,10 @@ Install Codex CLI if needed:
 ```bash
 npm install --global @openai/codex
 codex login
+
+# Optional Claude provider
+claude --version
+claude auth login
 ```
 
 On a headless server, Codex also supports device authentication:
@@ -130,6 +137,10 @@ The child `codex app-server` inherits the environment of `codex-web`, so
 provider keys should stay in the shell or service environment and must never be
 committed.
 
+Claude Code is started with `--print --output-format stream-json`. Its normal
+Claude authentication and environment configuration are reused; API keys are
+never sent to the browser or stored in browser settings.
+
 ### Supported CLI options
 
 Codex Web translates these interactive CLI options:
@@ -162,11 +173,20 @@ Run `codex-web --help` to see the local command help.
 | `CODEX_WEB_UPLOAD_DIR` | Codex Web cache directory | Where uploaded images are stored |
 | `XDG_CACHE_HOME` | `~/.cache` on Linux | Base cache directory |
 | `CODEX_BIN` | `codex` | Path to the Codex executable |
+| `CLAUDE_BIN` | `claude` | Path to the Claude Code executable |
+| `CLAUDE_HOME` | `~/.claude` | Claude Code home directory containing native sessions |
+| `CLAUDE_WEB_DATA_DIR` | `~/.cache/codex-web/claude` | Claude conversation metadata and history |
 
-Working directory, model, personality, sandbox, and approval settings selected
-in the browser apply to newly created conversations. Reasoning effort applies
-when a new turn starts. Resumed conversations keep their stored settings and
-the launch-time CLI defaults.
+The provider, working directory, model, personality, sandbox, approval, and
+Claude permission settings selected in the browser apply to newly created
+conversations. Reasoning effort applies when a new turn starts. Resumed
+conversations keep their stored provider and session settings.
+
+Claude conversations created in Codex Web are stored as local metadata and
+normalized history under `CLAUDE_WEB_DATA_DIR`. Existing Claude Code sessions
+are discovered read-only from `CLAUDE_HOME/projects` and resumed through their
+original session IDs. Protect both directories because conversation history may
+contain source code or other sensitive content.
 
 ## Slash commands
 

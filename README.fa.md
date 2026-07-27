@@ -5,8 +5,9 @@
 [![CI](https://github.com/msadegh/codex-web/actions/workflows/ci.yml/badge.svg)](https://github.com/msadegh/codex-web/actions/workflows/ci.yml)
 
 یک رابط مرورگری غیررسمی و محلی‌محور برای
-[Codex CLI](https://developers.openai.com/codex/cli/) نصب‌شده روی سیستم است.
-خود Codex همچنان روی لپ‌تاپ شما یا سروری که در اختیارتان است اجرا می‌شود؛
+[Codex CLI](https://developers.openai.com/codex/cli/) و Claude Code CLI نصب‌شده
+روی سیستم است. خود Codex یا Claude همچنان روی لپ‌تاپ شما یا سروری که در
+اختیارتان است اجرا می‌شود؛
 مرورگر فقط رابط چت مناسب‌تری برای متن فارسی، راست‌به‌چپ و متن ترکیبی
 فارسی/انگلیسی فراهم می‌کند.
 
@@ -18,6 +19,8 @@
 
 - استفاده از login، تنظیمات، مقادیر سطح اول profileها، skillها، MCP serverها،
   sessionها، sandbox و approvalهای Codex CLI نصب‌شده
+- اتصال به sessionهای Claude Code CLI با streaming، انتخاب مدل، تاریخچهٔ محلی
+  گفتگو و حالت‌های permission خود Claude
 - اجرای هم‌زمان چند گفتگوی ایزوله در یک تب مرورگر
 - نمایش سؤال‌ها و درخواست‌های تأیید فقط در گفتگوی مربوط به خودشان
 - استریم پاسخ، فعالیت ابزارها، plan، تغییر فایل‌ها و خروجی فرمان‌ها
@@ -55,7 +58,7 @@ Codex Web یک پنل کنترل برای coding agent است. دسترسی به
   Windows بومی هنوز تأیید نشده است.
 - Node.js نسخهٔ ۲۲ یا جدیدتر؛ از یک نسخهٔ LTS تحت پشتیبانی استفاده کنید.
 - نسخه‌ای جدید از Codex CLI که فرمان آزمایشی `app-server` را داشته باشد.
-- login یا provider profile تنظیم‌شده برای Codex
+- login یا provider profile تنظیم‌شده برای Codex و در صورت نیاز Claude Code CLI
 
 نسخهٔ فعلی با Codex CLI `0.145.0` تست شده است. نسخه‌های جدید دیگر نیز ممکن
 است کار کنند، اما protocol آزمایشی app-server می‌تواند تغییر کند. فایل
@@ -66,6 +69,10 @@ Codex Web یک پنل کنترل برای coding agent است. دسترسی به
 ```bash
 npm install --global @openai/codex
 codex login
+
+# provider اختیاری Claude
+claude --version
+claude auth login
 ```
 
 روی سرور بدون رابط گرافیکی می‌توانید از device authentication استفاده کنید:
@@ -131,6 +138,10 @@ codex-web --no-open
 می‌برد. بنابراین کلید provider باید در محیط shell یا سرویس بماند و هرگز
 داخل repository قرار نگیرد.
 
+Claude Code با گزینه‌های `--print --output-format stream-json` اجرا می‌شود و
+احراز هویت و تنظیمات محیطی معمول Claude را استفاده می‌کند. کلید API هرگز به
+مرورگر ارسال یا در تنظیمات مرورگر ذخیره نمی‌شود.
+
 ### گزینه‌های CLI پشتیبانی‌شده
 
 Codex Web این گزینه‌های تعاملی CLI را تبدیل می‌کند:
@@ -167,11 +178,19 @@ codex-web --help
 | `CODEX_WEB_UPLOAD_DIR` | پوشهٔ cache کدکس وب | محل ذخیرهٔ تصاویر آپلودشده |
 | `XDG_CACHE_HOME` | در Linux برابر `~/.cache` | پوشهٔ پایهٔ cache |
 | `CODEX_BIN` | `codex` | مسیر فایل اجرایی Codex |
+| `CLAUDE_BIN` | `claude` | مسیر فایل اجرایی Claude Code |
+| `CLAUDE_HOME` | `~/.claude` | پوشهٔ اصلی Claude Code و sessionهای native |
+| `CLAUDE_WEB_DATA_DIR` | `~/.cache/codex-web/claude` | metadata و تاریخچهٔ گفتگوهای Claude |
 
-پوشهٔ کاری، مدل، لحن، sandbox و approval انتخاب‌شده در مرورگر برای گفتگوهای
-جدید اعمال می‌شوند. Reasoning effort هنگام شروع turn جدید اعمال می‌شود.
-گفتگوهای ازسرگرفته‌شده تنظیمات ذخیره‌شده و پیش‌فرض‌های CLI زمان اجرا را حفظ
-می‌کنند.
+provider، پوشهٔ کاری، مدل، لحن، sandbox، approval و permissionهای Claude که
+در مرورگر انتخاب می‌شوند برای گفتگوهای جدید اعمال می‌شوند. Reasoning effort
+هنگام شروع turn جدید اعمال می‌شود. گفتگوهای ازسرگرفته‌شده provider و session
+خود را حفظ می‌کنند.
+
+گفتگوهای Claude که از Codex Web ساخته می‌شوند در `CLAUDE_WEB_DATA_DIR` ذخیره
+می‌شوند. sessionهای قبلی Claude Code به‌صورت read-only از
+`CLAUDE_HOME/projects` پیدا شده و با session ID اصلی خودشان ادامه داده می‌شوند.
+از هر دو پوشه محافظت کنید، چون ممکن است شامل source code یا اطلاعات حساس باشند.
 
 ## فرمان‌های اسلش
 
