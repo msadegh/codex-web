@@ -708,6 +708,28 @@ test("favicon and in-app marks share a palette-aware terminal logo", async () =>
   assert.match(styles, /\.brand-logo\s*\{[^}]*stroke:\s*currentcolor/s);
 });
 
+test("composer uses a neon palette frame and neutral ChatGPT-like stop control", async () => {
+  const [index, styles] = await Promise.all([
+    readFile(INDEX, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+  const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const stop =
+    [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
+      .map((match) => match.groups?.body || "")
+      .find((rule) => /background:/.test(rule)) || "";
+
+  assert.match(index, /class="context-chip-icon" data-icon="settings"/);
+  assert.match(index, /id="stop-turn"[^>]*>[\s\S]*?<rect[^>]+rx="1\.5"/);
+  assert.match(composer, /linear-gradient\(var\(--panel-3\), var\(--panel-3\)\) padding-box/);
+  assert.match(composer, /rgb\(var\(--accent-rgb\) \/ 0\.58\)/);
+  assert.match(composer, /rgb\(var\(--violet-rgb\) \/ 0\.46\)/);
+  assert.match(stop, /color:\s*var\(--bg\)/);
+  assert.match(stop, /background:\s*var\(--text\)/);
+  assert.match(stop, /border-radius:\s*50%/);
+  assert.doesNotMatch(stop, /danger|warning|#4b1728/);
+});
+
 test("failed technical activity chips stay visually neutral", async () => {
   const styles = await readFile(STYLES, "utf8");
   const failedSummary =
