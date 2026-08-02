@@ -791,6 +791,13 @@ test("composer redesign and neutral stop control retain the original theme", asy
   assert.match(composer, /background:\s*#171b17/);
   assert.match(composer, /border-radius:\s*22px/);
   assert.doesNotMatch(composer, /violet|neon|#42e8ff|#9b6dff/);
+  assert.match(index, /id="composer-tools"[^>]*>[\s\S]*?<path d="M12 5v14M5 12h14"/);
+  assert.equal((index.match(/class="composer-tool-option-description"/g) || []).length, 2);
+  assert.doesNotMatch(index, /composer-tool-option-copy|id="record-voice"|id="voice-recorder"/);
+  assert.match(
+    styles,
+    /\.composer-tool-option-description\s*\{[^}]*white-space:\s*nowrap/s,
+  );
   assert.match(stop, /color:\s*var\(--bg\)/);
   assert.match(stop, /background:\s*var\(--text\)/);
   assert.match(stop, /border-radius:\s*50%/);
@@ -1186,7 +1193,7 @@ test(
     document.querySelector("#composer-tools").click();
     document.querySelector("#plan-mode-option").click();
     assert.equal(document.querySelector("#plan-mode-option").getAttribute("aria-checked"), "true");
-    assert.equal(document.querySelector("#composer-tool-label").textContent, "Plan");
+    assert.match(document.querySelector("#composer-tools").getAttribute("aria-label"), /Plan mode/);
 
     document.querySelector("#composer-tools").click();
     document.querySelector("#goal-mode-option").click();
@@ -1279,125 +1286,7 @@ test(
     );
     document.querySelector("#dictate").click();
     assert.equal(document.querySelector("#dictate").classList.contains("active"), false);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  },
-);
-
-test(
-  "recorded voice uploads securely and starts a localAudio turn",
-  { concurrency: false },
-  async (t) => {
-    const turns = [];
-    let audioUploads = 0;
-    let threadListLoaded = false;
-    const thread = {
-      id: "voice-thread",
-      name: "Voice test",
-      cwd: "/workspace",
-      provider: "codex",
-      status: { type: "idle" },
-      turns: [],
-    };
-    const fetchHandler = async (path, options = {}) => {
-      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
-      if (path === "/api/uploads/audio") {
-        audioUploads += 1;
-        assert.equal(options.headers["Content-Type"], "audio/webm");
-        return jsonResponse({ path: "C:\\voice\\message.webm", type: "audio/webm" }, 201);
-      }
-      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
-      const request = JSON.parse(options.body);
-      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
-      if (request.method === "collaborationMode/list") return jsonResponse({ result: { data: [] } });
-      if (request.method === "thread/list") {
-        threadListLoaded = true;
-        return jsonResponse({ result: { data: [], nextCursor: null } });
-      }
-      if (request.method === "thread/start") return jsonResponse({ result: { thread } });
-      if (request.method === "thread/goal/get") return jsonResponse({ result: { goal: null } });
-      if (request.method === "turn/start") {
-        turns.push(request.params);
-        return jsonResponse({
-          result: {
-            turn: { id: "voice-turn", status: "inProgress", items: [], error: null },
-          },
-        });
-      }
-      throw new Error(`Unexpected RPC method: ${request.method}`);
-    };
-    const { window } = await createHarness(t, { fetchHandler });
-    let trackStopped = false;
-    let microphoneRequests = 0;
-    let recorderStarts = 0;
-    let recorderStops = 0;
-    const mediaDevices = {
-      async getUserMedia() {
-        microphoneRequests += 1;
-        return { getTracks: () => [{ stop: () => (trackStopped = true) }] };
-      },
-    };
-    Object.defineProperty(window.navigator, "mediaDevices", {
-      configurable: true,
-      value: mediaDevices,
-    });
-    Object.defineProperty(globalThis.navigator, "mediaDevices", {
-      configurable: true,
-      value: mediaDevices,
-    });
-    class FakeMediaRecorder {
-      static isTypeSupported(type) {
-        return type.startsWith("audio/webm");
-      }
-      constructor(stream, options = {}) {
-        this.stream = stream;
-        this.mimeType = options.mimeType || "audio/webm";
-        this.state = "inactive";
-      }
-      start() {
-        recorderStarts += 1;
-        this.state = "recording";
-      }
-      stop() {
-        recorderStops += 1;
-        this.state = "inactive";
-        this.ondataavailable?.({
-          data: new Blob([Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3])], {
-            type: "audio/webm",
-          }),
-        });
-        this.onstop?.();
-      }
-    }
-    Object.defineProperty(window, "MediaRecorder", {
-      configurable: true,
-      value: FakeMediaRecorder,
-    });
-    assert.equal(window.MediaRecorder, FakeMediaRecorder);
-    const document = window.document;
-    await waitFor(() => threadListLoaded, "initial thread list was not loaded");
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    await waitFor(() => !document.querySelector("#record-voice").disabled, "voice button stayed disabled");
-    document
-      .querySelector("#record-voice")
-      .dispatchEvent(new window.Event("click", { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.equal(document.querySelector("#toasts").textContent.trim(), "");
-    assert.equal(microphoneRequests, 1);
-    assert.equal(recorderStarts, 1);
-    assert.equal(recorderStops, 0);
-    assert.equal(document.querySelector("#voice-recorder").className, "voice-recorder");
-    await waitFor(
-      () => !document.querySelector("#voice-recorder").classList.contains("hidden"),
-      "voice recorder did not open",
-    );
-    document.querySelector("#voice-send").click();
-    await waitFor(() => turns.length === 1, "voice turn was not started");
-    assert.equal(audioUploads, 1);
-    assert.deepEqual(turns[0].input, [
-      { type: "localAudio", path: "C:\\voice\\message.webm" },
-    ]);
-    assert.equal(trackStopped, true);
-    assert.match(document.querySelector(".message-row.user .message-content").textContent, /پیام صوتی/);
+    assert.equal(document.querySelector("#record-voice"), null);
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );
