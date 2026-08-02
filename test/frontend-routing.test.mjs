@@ -792,8 +792,10 @@ test("composer redesign and neutral stop control retain the original theme", asy
   assert.match(composer, /border-radius:\s*22px/);
   assert.doesNotMatch(composer, /violet|neon|#42e8ff|#9b6dff/);
   assert.match(index, /id="composer-tools"[^>]*>[\s\S]*?<path d="M12 5v14M5 12h14"/);
+  assert.match(index, /<strong>Goal mode<\/strong>/);
+  assert.match(index, /<strong>Plan mode<\/strong>/);
   assert.equal((index.match(/class="composer-tool-option-description"/g) || []).length, 2);
-  assert.doesNotMatch(index, /composer-tool-option-copy|id="record-voice"|id="voice-recorder"/);
+  assert.doesNotMatch(index, /id="record-voice"|id="voice-recorder"/);
   assert.match(
     styles,
     /\.composer-tool-option-description\s*\{[^}]*white-space:\s*nowrap/s,

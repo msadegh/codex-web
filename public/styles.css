@@ -2356,6 +2356,23 @@ dialog form,
   stroke-width: 1.6;
 }
 
+.composer-tool-option-text {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.composer-tool-option-text strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 650;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 .composer-tool-option-description {
   min-width: 0;
   overflow: hidden;
