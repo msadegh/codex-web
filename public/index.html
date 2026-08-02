@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#212121" />
     <meta
       name="description"
       content="رابط وب لوکال برای Codex CLI با پشتیبانی درست از متن فارسی و انگلیسی"
@@ -90,11 +91,10 @@
 
         <section class="conversation" id="conversation" aria-live="polite">
           <div class="welcome" id="welcome">
-            <div class="welcome-mark">C</div>
-            <h2 id="welcome-title">چه کاری روی کد انجام دهیم؟</h2>
+            <div class="welcome-mark">✦</div>
+            <h2 id="welcome-title">امروز روی چی کار کنیم؟</h2>
             <p id="welcome-description">
-              پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها،
-              MCPها و دسترسی‌های ترمینال شما.
+              کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.
             </p>
             <div class="suggestions">
               <button data-prompt="ساختار این پروژه را بررسی کن و خلاصه‌ای از بخش‌های اصلی بده.">
@@ -152,6 +152,22 @@
               tabindex="-1"
               aria-hidden="true"
             />
+            <section class="prompt-queue hidden" id="prompt-queue" aria-live="polite">
+              <div class="prompt-queue-header">
+                <span class="prompt-queue-title">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 7h11M8 12h11M8 17h11" />
+                    <path d="M4.5 7h.01M4.5 12h.01M4.5 17h.01" />
+                  </svg>
+                  <strong>در صف</strong>
+                  <span class="prompt-queue-count" id="prompt-queue-count"></span>
+                </span>
+                <button class="prompt-queue-clear" id="prompt-queue-clear" type="button">
+                  پاک‌کردن صف
+                </button>
+              </div>
+              <div class="prompt-queue-items" id="prompt-queue-items"></div>
+            </section>
             <textarea
               id="prompt"
               rows="1"
@@ -166,8 +182,17 @@
             ></textarea>
             <div class="composer-footer">
               <div class="composer-context">
-                <button class="context-chip" id="cwd-chip" title="تغییر پوشه کاری">
-                  <span aria-hidden="true">⌂</span>
+                <button
+                  class="context-chip"
+                  id="cwd-chip"
+                  type="button"
+                  aria-label="تغییر پوشهٔ کاری و تنظیمات گفتگو"
+                  title="پوشهٔ کاری و تنظیمات گفتگو"
+                >
+                  <svg class="context-chip-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3.75 7.5A2.25 2.25 0 0 1 6 5.25h3.1l1.8 2.25H18A2.25 2.25 0 0 1 20.25 9.75v7A2.25 2.25 0 0 1 18 19H6a2.25 2.25 0 0 1-2.25-2.25z" />
+                    <path d="M8.25 13.25h7.5M12 9.5V17" />
+                  </svg>
                   <bdi id="cwd-label">…</bdi>
                 </button>
                 <span class="context-chip passive" id="model-label">مدل پیش‌فرض</span>
@@ -189,20 +214,27 @@
                     <path d="m5 17 4.2-4.2a1.5 1.5 0 0 1 2.1 0l1.4 1.4 1.1-1.1a1.5 1.5 0 0 1 2.1 0L20 17.2" />
                   </svg>
                 </button>
-                <button class="stop-button hidden" id="stop-turn" title="توقف پاسخ">■</button>
-                <button class="send-button" id="send-message" aria-label="ارسال" title="ارسال">
+                <button class="stop-button hidden" id="stop-turn" type="button" aria-label="توقف پاسخ" title="توقف پاسخ">■</button>
+                <button class="send-button" id="send-message" type="button" aria-label="ارسال" title="ارسال">
                   ↑
                 </button>
               </div>
             </div>
           </div>
-          <p class="composer-hint">Enter برای ارسال · Shift+Enter برای خط جدید</p>
+          <p class="composer-hint" id="composer-hint">Enter برای ارسال · Shift+Enter برای خط جدید</p>
         </div>
       </main>
     </div>
 
     <div class="mobile-scrim" id="mobile-scrim"></div>
     <div class="toast-region" id="toasts" aria-live="assertive"></div>
+    <button class="selection-ask hidden" id="selection-ask" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7.25 10.75H4.5A5.5 5.5 0 0 1 10 5.25v3A2.5 2.5 0 0 1 7.5 10.75v3H4.75" />
+        <path d="M16.25 10.75H13.5A5.5 5.5 0 0 1 19 5.25v3a2.5 2.5 0 0 1-2.5 2.5v3h-2.75" />
+      </svg>
+      <span>از Codex بپرس</span>
+    </button>
 
     <dialog class="settings-dialog" id="settings-dialog" data-provider="codex">
       <form method="dialog" id="settings-form">
@@ -291,6 +323,33 @@
           </select>
           <small>در حالت --print سؤال تعاملی نمایش داده نمی‌شود؛ این گزینه مستقیماً به Claude Code CLI ارسال می‌شود.</small>
         </label>
+
+        <fieldset class="field palette-field" id="palette-field">
+          <legend>رنگ تأکیدی رابط</legend>
+          <small>فقط اجزای رنگی تغییر می‌کنند؛ پس‌زمینه و کنتراست متن ثابت می‌ماند.</small>
+          <div class="palette-options">
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="cyan" />
+              <span class="palette-swatch palette-cyan" aria-hidden="true"></span>
+              <span>فیروزه‌ای</span>
+            </label>
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="red" />
+              <span class="palette-swatch palette-red" aria-hidden="true"></span>
+              <span>قرمز</span>
+            </label>
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="purple" />
+              <span class="palette-swatch palette-purple" aria-hidden="true"></span>
+              <span>بنفش</span>
+            </label>
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="green" />
+              <span class="palette-swatch palette-green" aria-hidden="true"></span>
+              <span>سبز</span>
+            </label>
+          </div>
+        </fieldset>
 
         <div class="warning-box" id="full-access-warning">
           دسترسی کامل یعنی agent می‌تواند خارج از workspace هم فایل‌ها و فرمان‌های سیستم را تغییر دهد.

@@ -168,6 +168,7 @@ const elements = {
   approvalTitle: $("#approval-title"),
   approvalSelect: $("#approval-select"),
   connectionLabel: $("#connection-label"),
+  composerHint: $("#composer-hint"),
   conversation: $("#conversation"),
   cwdChip: $("#cwd-chip"),
   cwdInput: $("#cwd-input"),
@@ -197,10 +198,15 @@ const elements = {
   claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
   prompt: $("#prompt"),
+  promptQueue: $("#prompt-queue"),
+  promptQueueClear: $("#prompt-queue-clear"),
+  promptQueueCount: $("#prompt-queue-count"),
+  promptQueueItems: $("#prompt-queue-items"),
   sandboxSelect: $("#sandbox-select"),
   saveSettings: $("#save-settings"),
   scrollBottom: $("#scroll-bottom"),
   sendMessage: $("#send-message"),
+  selectionAsk: $("#selection-ask"),
   settingsCancel: $("#settings-cancel"),
   settingsClose: $("#settings-close"),
   settingsDialog: $("#settings-dialog"),
@@ -230,12 +236,14 @@ const defaultSettings = {
   cwd: "",
   effort: "",
   modelByProvider: { codex: "", claude: "" },
+  palette: "cyan",
   personality: "",
   provider: "codex",
   sandbox: "",
 };
 
-const SETTINGS_VERSION = 4;
+const SETTINGS_VERSION = 5;
+const ACCENT_PALETTES = new Set(["cyan", "red", "purple", "green"]);
 
 const state = {
   activeInteractionKey: null,
@@ -259,17 +267,21 @@ const state = {
   notifiedTurns: new Set(),
   optimisticUserMessages: new Map(),
   pendingInteractions: new Map(),
+  pendingTurnStarts: 0,
   postponedInteractions: new Set(),
+  promptQueues: new Map(),
   providerStatuses: {
     claude: { message: "Claude Code CLI پیدا نشد", ready: false },
     codex: { message: "در حال راه‌اندازی Codex…", ready: false },
   },
+  queueProcessing: new Set(),
   forceNextScroll: false,
   imageUploadsByDraft: new Map(),
   interactionSubmitting: false,
   scrollFrame: null,
   scrollingToBottom: false,
   settings: loadSettings(),
+  selectedAssistantText: "",
   slashActiveIndex: 0,
   slashCommandExecuting: false,
   slashDismissedValue: null,
@@ -304,11 +316,19 @@ function loadSettings() {
       claudePermissionMode:
         savedSettings.claudePermissionMode || defaultSettings.claudePermissionMode,
       modelByProvider,
+      palette: ACCENT_PALETTES.has(savedSettings.palette)
+        ? savedSettings.palette
+        : defaultSettings.palette,
       provider: savedSettings.provider === "claude" ? "claude" : defaultSettings.provider,
     };
   } catch {
     return { ...defaultSettings };
   }
+}
+
+function applyPalette(palette = defaultSettings.palette) {
+  const next = ACCENT_PALETTES.has(palette) ? palette : defaultSettings.palette;
+  document.documentElement.dataset.palette = next;
 }
 
 function persistSettings() {
@@ -830,9 +850,85 @@ function promptSelection() {
 function insertPromptText(text) {
   if (!text) return;
   const { start, end } = promptSelection();
-  elements.prompt.setRangeText(text, start, end, "end");
+  if (typeof elements.prompt.setRangeText === "function") {
+    elements.prompt.setRangeText(text, start, end, "end");
+  } else {
+    elements.prompt.value =
+      elements.prompt.value.slice(0, start) + text + elements.prompt.value.slice(end);
+    const nextPosition = start + text.length;
+    elements.prompt.setSelectionRange(nextPosition, nextPosition);
+  }
   saveCurrentDraft();
   resizePrompt();
+}
+
+function markdownQuote(text) {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+function insertAssistantQuote(text) {
+  const quote = markdownQuote(text || "");
+  if (!quote) return;
+  const { start, end } = promptSelection();
+  const before = elements.prompt.value.slice(0, start);
+  const prefix = before && !before.endsWith("\n\n") ? "\n\n" : "";
+  insertPromptText(`${prefix}${quote}\n\n`);
+  elements.prompt.focus();
+}
+
+function hideSelectionAsk() {
+  state.selectedAssistantText = "";
+  elements.selectionAsk.classList.add("hidden");
+}
+
+function selectedAssistantRange() {
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || selection.rangeCount < 1) return null;
+  const text = selection.toString().trim();
+  if (!text) return null;
+  const range = selection.getRangeAt(0);
+  const startNode = range.startContainer;
+  const startElement =
+    startNode?.nodeType === 1 ? startNode : startNode?.parentElement;
+  const content = startElement?.closest?.(".message-row.assistant .message-content");
+  if (!content || !content.contains(range.endContainer)) return null;
+  return { content, range, selection, text };
+}
+
+function updateSelectionAsk() {
+  const selected = selectedAssistantRange();
+  if (!selected) {
+    hideSelectionAsk();
+    return;
+  }
+  const rect = selected.range.getBoundingClientRect?.();
+  if (!rect) {
+    hideSelectionAsk();
+    return;
+  }
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+  const center = Math.min(viewportWidth - 82, Math.max(82, rect.left + rect.width / 2));
+  const below = rect.bottom + 9;
+  const top = below + 42 < viewportHeight ? below : Math.max(8, rect.top - 47);
+  state.selectedAssistantText = selected.text;
+  elements.selectionAsk.style.left = `${center}px`;
+  elements.selectionAsk.style.top = `${top}px`;
+  elements.selectionAsk.classList.remove("hidden");
+}
+
+let selectionAskFrame = null;
+function scheduleSelectionAskUpdate() {
+  if (selectionAskFrame !== null) return;
+  selectionAskFrame = requestAnimationFrame(() => {
+    selectionAskFrame = null;
+    updateSelectionAsk();
+  });
 }
 
 function appendImagePaths(value, paths) {
@@ -976,9 +1072,19 @@ function updateComposerControls() {
     (slash.command
       ? slashCommandAvailability(slash.command).available
       : !state.navigating && !state.slashCommandExecuting);
+  const queueMode = state.busy && !slash;
   elements.sendMessage.disabled = slash
     ? !slashCanRun
-    : !state.connected || state.busy || state.navigating || uploading || !text;
+    : !state.connected || state.navigating || uploading || !text;
+  elements.sendMessage.classList.toggle("queue-mode", queueMode);
+  elements.sendMessage.setAttribute(
+    "aria-label",
+    queueMode ? "افزودن پیام به صف" : "ارسال پیام",
+  );
+  elements.sendMessage.title = queueMode ? "افزودن به صف" : "ارسال";
+  elements.composerHint.textContent = state.busy
+    ? "Enter برای افزودن به صف · Shift+Enter برای خط جدید"
+    : "Enter برای ارسال · Shift+Enter برای خط جدید";
   elements.addImages.disabled = state.navigating || uploading;
   elements.imageInput.disabled = state.navigating || uploading;
   elements.uploadStatus.textContent =
@@ -994,13 +1100,13 @@ function updateAgentCopy(provider) {
   elements.prompt.placeholder = `پیام به ${label}…`;
   elements.prompt.setAttribute("aria-label", `پیام به ${label}`);
   if (provider === "claude") {
-    elements.welcomeTitle.textContent = "چه کاری را به Claude بسپاریم؟";
+    elements.welcomeTitle.textContent = "امروز چی رو به Claude بسپاریم؟";
     elements.welcomeDescription.textContent =
-      "پشت این صفحه Claude Code CLI اجرا می‌شود؛ با sessionها و permission mode خود Claude.";
+      "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی Claude پشت صحنه آماده‌اند.";
   } else {
-    elements.welcomeTitle.textContent = "چه کاری روی کد انجام دهیم؟";
+    elements.welcomeTitle.textContent = "امروز روی چی کار کنیم؟";
     elements.welcomeDescription.textContent =
-      "پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها، MCPها و دسترسی‌های ترمینال شما.";
+      "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.";
   }
 }
 
@@ -1132,6 +1238,10 @@ function updateSettingsUi() {
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
   elements.claudePermissionMode.value = state.settings.claudePermissionMode;
+  for (const input of document.querySelectorAll('input[name="accent-palette"]')) {
+    input.checked = input.value === state.settings.palette;
+  }
+  applyPalette(state.settings.palette);
   updateSettingsProviderUi(provider);
   updateModelLabel(provider);
 }
@@ -1173,11 +1283,17 @@ function saveSettings() {
       ...state.settings.modelByProvider,
       [provider]: elements.modelSelect.value,
     },
+    palette:
+      [...document.querySelectorAll('input[name="accent-palette"]')].find(
+        (input) => input.checked,
+      )?.value ||
+      defaultSettings.palette,
     personality: elements.personalitySelect.value,
     provider,
     sandbox: elements.sandboxSelect.value,
   };
   persistSettings();
+  applyPalette(state.settings.palette);
   state.models = state.modelsByProvider[provider] || [];
   updateSettingsUi();
   updateConnection();
@@ -1547,6 +1663,129 @@ function draftKey(threadId = state.currentThreadId) {
   return threadId || `${NEW_THREAD_DRAFT_PREFIX}:${state.newDraftId}`;
 }
 
+function promptQueueFor(key = draftKey(), create = false) {
+  if (!state.promptQueues.has(key) && create) state.promptQueues.set(key, []);
+  return state.promptQueues.get(key) || [];
+}
+
+function renderPromptQueue() {
+  const queue = promptQueueFor();
+  elements.promptQueue.classList.toggle("hidden", queue.length === 0);
+  elements.promptQueueCount.textContent = queue.length.toLocaleString("fa-IR");
+  elements.promptQueueItems.replaceChildren();
+
+  queue.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "prompt-queue-item";
+    row.dataset.queueId = item.id;
+
+    const order = document.createElement("span");
+    order.className = "prompt-queue-index";
+    order.textContent = String(index + 1).padStart(2, "0");
+
+    const preview = document.createElement("bdi");
+    preview.className = "prompt-queue-preview";
+    preview.textContent = item.text.replace(/\s+/g, " ").trim();
+    preview.title = item.text;
+
+    const actions = document.createElement("span");
+    actions.className = "prompt-queue-actions";
+    actions.innerHTML = `
+      <button class="prompt-queue-action" type="button" data-queue-action="edit" aria-label="ویرایش پیام صف" title="ویرایش">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.7 5.3 4 4M4.75 19.25l3.6-.8L19.2 7.6a1.4 1.4 0 0 0 0-2l-.8-.8a1.4 1.4 0 0 0-2 0L5.55 15.65z" /></svg>
+      </button>
+      <button class="prompt-queue-action" type="button" data-queue-action="remove" aria-label="حذف پیام از صف" title="حذف">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4.75h6V7M8 10v7M12 10v7M16 10v7M6.5 7l.7 12.25h9.6L17.5 7" /></svg>
+      </button>`;
+    row.append(order, preview, actions);
+    elements.promptQueueItems.append(row);
+  });
+}
+
+function migratePromptQueue(sourceKey, targetKey) {
+  if (!sourceKey || sourceKey === targetKey) return;
+  const source = promptQueueFor(sourceKey);
+  if (!source.length) return;
+  const target = promptQueueFor(targetKey);
+  state.promptQueues.set(targetKey, [...source, ...target]);
+  state.promptQueues.delete(sourceKey);
+  if (draftKey() === targetKey) renderPromptQueue();
+}
+
+function enqueuePrompt(text, key = draftKey()) {
+  const queue = promptQueueFor(key, true);
+  const item = { id: crypto.randomUUID(), text };
+  queue.push(item);
+  if (key === draftKey()) {
+    elements.prompt.value = "";
+    state.drafts.set(key, "");
+    closeSlashCommandMenu();
+    resizePrompt();
+    renderPromptQueue();
+  }
+  return item;
+}
+
+function removeQueuedPrompt(queueId, { edit = false } = {}) {
+  const key = draftKey();
+  const queue = promptQueueFor(key);
+  const index = queue.findIndex((item) => item.id === queueId);
+  if (index < 0) return;
+  const [item] = queue.splice(index, 1);
+  if (!queue.length) state.promptQueues.delete(key);
+  renderPromptQueue();
+  if (!edit) return;
+
+  const existing = elements.prompt.value.trim();
+  elements.prompt.value = existing ? `${item.text}\n\n${elements.prompt.value}` : item.text;
+  elements.prompt.setSelectionRange(elements.prompt.value.length, elements.prompt.value.length);
+  saveCurrentDraft();
+  resizePrompt();
+  elements.prompt.focus();
+}
+
+function clearPromptQueue() {
+  state.promptQueues.delete(draftKey());
+  renderPromptQueue();
+}
+
+function scheduleNextQueuedPrompt(threadId = state.currentThreadId) {
+  if (!threadId) return;
+  setTimeout(() => void processNextQueuedPrompt(threadId), 0);
+}
+
+async function processNextQueuedPrompt(threadId) {
+  if (
+    !threadId ||
+    threadId !== state.currentThreadId ||
+    state.busy ||
+    state.navigating ||
+    !state.connected ||
+    state.pendingTurnStarts > 0 ||
+    imageUploadsForDraft(threadId) > 0
+  ) {
+    return false;
+  }
+  const key = draftKey(threadId);
+  if (state.queueProcessing.has(key)) return false;
+  const queue = promptQueueFor(key);
+  const item = queue.shift();
+  if (!item) return false;
+  if (!queue.length) state.promptQueues.delete(key);
+  state.queueProcessing.add(key);
+  renderPromptQueue();
+  try {
+    const started = await sendPrompt(item.text, { fromQueue: true });
+    if (!started) {
+      promptQueueFor(key, true).unshift(item);
+      renderPromptQueue();
+    }
+    return started;
+  } finally {
+    state.queueProcessing.delete(key);
+  }
+}
+
 function saveCurrentDraft() {
   state.drafts.set(draftKey(), elements.prompt.value);
 }
@@ -1554,6 +1793,7 @@ function saveCurrentDraft() {
 function restoreDraft(threadId = state.currentThreadId) {
   elements.prompt.value = state.drafts.get(draftKey(threadId)) || "";
   state.slashDismissedValue = null;
+  renderPromptQueue();
   resizePrompt();
 }
 
@@ -1765,18 +2005,27 @@ function itemText(item) {
   return "";
 }
 
+function createAssistantMessageActions() {
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  actions.setAttribute("aria-label", "کارهای پاسخ");
+  actions.innerHTML = `
+    <button class="message-action" type="button" data-message-action="copy" title="کپی پاسخ" aria-label="کپی پاسخ">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+      <span>کپی</span>
+    </button>
+    <button class="message-action" type="button" data-message-action="quote" title="ارجاع به این پاسخ" aria-label="ارجاع به این پاسخ در پیام تازه">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.25 10.75H4.5A5.5 5.5 0 0 1 10 5.25v3A2.5 2.5 0 0 1 7.5 10.75v3H4.75M16.25 10.75H13.5A5.5 5.5 0 0 1 19 5.25v3a2.5 2.5 0 0 1-2.5 2.5v3h-2.75" /></svg>
+      <span>ارجاع</span>
+    </button>`;
+  return actions;
+}
+
 function createMessageView(item) {
   const role = item.type === "userMessage" ? "user" : "assistant";
   const row = document.createElement("article");
   row.className = `message-row ${role}`;
   row.dataset.itemId = item.id;
-
-  if (role === "assistant") {
-    const avatar = document.createElement("div");
-    avatar.className = "message-avatar";
-    avatar.textContent = "C";
-    row.append(avatar);
-  }
 
   const body = document.createElement("div");
   body.className = "message-body";
@@ -1784,6 +2033,7 @@ function createMessageView(item) {
   content.className = "message-content";
   content.dir = "auto";
   body.append(content);
+  if (role === "assistant") body.append(createAssistantMessageActions());
   row.append(body);
   elements.messages.append(row);
   if (role === "user") scheduleUserMessageNavigationUpdate();
@@ -1792,30 +2042,31 @@ function createMessageView(item) {
 
 function activityTitle(item) {
   const titles = {
-    collabAgentToolCall: "فعالیت agent فرعی",
-    commandExecution: "اجرای فرمان",
-    contextCompaction: "فشرده‌سازی context",
-    dynamicToolCall: `ابزار: ${item.tool || ""}`,
-    enteredReviewMode: "ورود به حالت review",
-    exitedReviewMode: "پایان حالت review",
-    fileChange: "تغییر فایل‌ها",
-    hookPrompt: "اجرای hook",
+    collabAgentToolCall: "عامل‌های همکار",
+    commandExecution: "ترمینال",
+    contextCompaction: "بهینه‌سازی گفتگو",
+    dynamicToolCall: item.tool ? `ابزار · ${item.tool}` : "ابزار",
+    enteredReviewMode: "حالت بررسی",
+    exitedReviewMode: "پایان بررسی",
+    fileChange: "ویرایش فایل‌ها",
+    hookPrompt: "Hook",
     imageGeneration: "ساخت تصویر",
     imageView: "مشاهده تصویر",
-    mcpToolCall: `MCP: ${item.server || ""} / ${item.tool || ""}`,
-    plan: "برنامه کار",
-    reasoning: "روند بررسی",
+    mcpToolCall: item.tool ? `ابزار · ${item.tool}` : "ابزار MCP",
+    plan: "برنامه",
+    reasoning: "تفکر",
     sleep: "انتظار",
-    subAgentActivity: "فعالیت agent فرعی",
-    webSearch: `جستجوی وب: ${item.query || ""}`,
+    subAgentActivity: "عامل‌های همکار",
+    webSearch: item.query ? `جستجوی وب · ${item.query}` : "جستجوی وب",
   };
   return titles[item.type] || item.type || "فعالیت";
 }
 
 function createActivityView(item) {
   const details = document.createElement("details");
-  details.className = "activity-card";
+  details.className = `activity-card activity-${item.type.replace(/[^a-z0-9_-]/gi, "-")}`;
   details.dataset.itemId = item.id;
+  details.dataset.activityType = item.type;
   const summary = document.createElement("summary");
   summary.textContent = activityTitle(item);
   summary.addEventListener("click", (event) => {
@@ -1892,6 +2143,8 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
 
   const running = phase !== "completed";
   const hasText = Boolean(view.text.trim());
+  const wasRunning = view.element.classList.contains("running");
+  view.element.hidden = false;
   view.element.classList.add("reasoning-card");
   view.element.classList.toggle("running", running);
   view.element.setAttribute("aria-busy", String(running));
@@ -1903,11 +2156,11 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
       "reasoning-stopped",
     );
     view.summary.removeAttribute("aria-disabled");
-    view.summary.textContent = "روند بررسی";
+    view.summary.textContent = running ? "در حال فکر کردن" : "تفکر";
     view.content.hidden = false;
     view.content.className = "activity-content";
     view.content.textContent = view.text;
-    if (running) view.element.open = true;
+    if (!running && wasRunning) view.element.open = false;
     return;
   }
 
@@ -1916,15 +2169,18 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
   view.element.classList.toggle("reasoning-complete", !running && !stopped);
   view.element.classList.toggle("reasoning-stopped", stopped);
   view.element.open = false;
+  view.element.hidden = !running && !stopped;
   view.summary.setAttribute("aria-disabled", "true");
   view.content.hidden = true;
   view.content.replaceChildren();
   setReasoningStatusLabel(
     view,
-    running ? "در حال بررسی" : stopped ? "بررسی متوقف شد" : "بررسی انجام شد",
+    running ? "در حال فکر کردن" : stopped ? "تفکر متوقف شد" : "تفکر انجام شد",
     running,
   );
 }
+
+applyPalette(state.settings.palette);
 
 function updateCompaction(view, phase) {
   const running = phase !== "completed";
@@ -1932,6 +2188,7 @@ function updateCompaction(view, phase) {
   view.element.classList.toggle("running", running);
   view.element.classList.toggle("completed", !running);
   view.element.open = false;
+  view.element.hidden = !running;
   view.element.setAttribute("aria-busy", String(running));
   view.summary.setAttribute("aria-disabled", "true");
   view.summary.textContent = running
@@ -1951,9 +2208,16 @@ function updateActivity(view, item, phase) {
     return;
   }
 
+  const wasRunning = view.element.classList.contains("running");
   const running = phase !== "completed" && ["inProgress", "running"].includes(item.status);
+  const failed =
+    ["failed", "error"].includes(item.status) ||
+    (item.type === "commandExecution" && item.exitCode != null && item.exitCode !== 0);
+  view.element.hidden = false;
   view.element.classList.toggle("running", running);
-  if (running) view.element.open = true;
+  view.element.classList.toggle("completed", !running);
+  view.element.classList.toggle("failed", failed);
+  if (!running && wasRunning) view.element.open = false;
 
   if (item.type === "commandExecution") {
     view.content.className = "activity-sections";
@@ -2142,6 +2406,7 @@ function renderHistory(thread) {
   renderThreadList();
   updateAttentionUi();
   scheduleScrollToBottom(true);
+  if (!state.busy) scheduleNextQueuedPrompt(thread.id);
 }
 
 async function openThread(threadId, { historyMode = "push" } = {}) {
@@ -2160,6 +2425,7 @@ async function openThread(threadId, { historyMode = "push" } = {}) {
     renderThreadList();
     activateThreadInteractions(threadId);
     updateConnection();
+    if (!state.busy) scheduleNextQueuedPrompt(threadId);
     closeSidebar();
     return true;
   }
@@ -2445,7 +2711,7 @@ function renderPlan(params) {
   let view = state.itemViews.get(id);
   if (!view) {
     view = createActivityView({ id, type: "plan" });
-    view.element.open = true;
+    view.element.open = false;
     state.itemViews.set(id, view);
   }
   view.content.className = "plan-list";
@@ -2487,6 +2753,7 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
   if (!state.threads.some((thread) => thread.id === result.thread.id)) {
     state.threads.unshift(result.thread);
   }
+  migratePromptQueue(sourceDraftKey, result.thread.id);
   if (state.drafts.has(sourceDraftKey)) {
     state.drafts.set(result.thread.id, state.drafts.get(sourceDraftKey));
     state.drafts.delete(sourceDraftKey);
@@ -2509,20 +2776,18 @@ function turnEventKey(threadId, turnId) {
   return `${threadId}:${turnId}`;
 }
 
-async function sendPrompt(text = elements.prompt.value) {
+async function sendPrompt(text = elements.prompt.value, { fromQueue = false } = {}) {
   if (parseSlashCommand(text)) {
-    await handleSlashCommand(text);
-    return;
+    return Boolean(await handleSlashCommand(text));
   }
   text = text.trim();
-  if (
-    !text ||
-    !state.connected ||
-    state.busy ||
-    state.navigating ||
-    imageUploadsForDraft() > 0
-  ) {
-    return;
+  if (!text || !state.connected || state.navigating || imageUploadsForDraft() > 0) {
+    return false;
+  }
+  if (state.busy) {
+    if (fromQueue) return false;
+    enqueuePrompt(text);
+    return true;
   }
   const sourceThreadId = state.currentThreadId;
   const sourceDraftKey = draftKey(sourceThreadId);
@@ -2530,9 +2795,11 @@ async function sendPrompt(text = elements.prompt.value) {
   let targetThreadId = sourceThreadId;
   const clientUserMessageId = crypto.randomUUID();
   const input = [{ type: "text", text }];
-  elements.prompt.value = "";
-  state.drafts.set(sourceDraftKey, "");
-  resizePrompt();
+  if (!fromQueue) {
+    elements.prompt.value = "";
+    state.drafts.set(sourceDraftKey, "");
+    resizePrompt();
+  }
   renderOptimisticUserMessage(clientUserMessageId, input);
   scrollToBottom(true, true);
   setBusy(true);
@@ -2544,6 +2811,8 @@ async function sendPrompt(text = elements.prompt.value) {
       unread: false,
     });
   }
+  state.pendingTurnStarts += 1;
+  let turnAccepted = false;
   try {
     const threadId = await ensureThread(
       sourceThreadId,
@@ -2568,6 +2837,7 @@ async function sendPrompt(text = elements.prompt.value) {
       params.effort = state.settings.effort;
     }
     const result = await rpc("turn/start", params);
+    turnAccepted = true;
     settleOptimisticUserMessage(clientUserMessageId);
     const completedBeforeResponse = state.completedTurns.has(
       turnEventKey(threadId, result.turn.id),
@@ -2588,11 +2858,14 @@ async function sendPrompt(text = elements.prompt.value) {
     }
   } catch (error) {
     const shouldRollback = rollbackOptimisticUserMessage(clientUserMessageId);
+    turnAccepted = !shouldRollback;
     if (shouldRollback) {
       const restoreThreadId = targetThreadId || sourceThreadId;
       const restoreKey = restoreThreadId ? draftKey(restoreThreadId) : sourceDraftKey;
-      const newerDraft = state.drafts.get(restoreKey) || "";
-      state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
+      if (!fromQueue) {
+        const newerDraft = state.drafts.get(restoreKey) || "";
+        state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
+      }
       if (restoreThreadId) {
         const activity = ensureThreadActivity(restoreThreadId);
         if (activity.phase === "running" && !activity.turnId) {
@@ -2608,11 +2881,17 @@ async function sendPrompt(text = elements.prompt.value) {
         (!restoreThreadId && draftKey() === sourceDraftKey)
       ) {
         setBusy(false);
-        restoreDraft(restoreThreadId);
+        if (!fromQueue) restoreDraft(restoreThreadId);
       }
     }
     showError(error, "ارسال پیام");
+  } finally {
+    state.pendingTurnStarts = Math.max(0, state.pendingTurnStarts - 1);
+    if (turnAccepted && state.currentThreadId && !state.busy) {
+      scheduleNextQueuedPrompt(state.currentThreadId);
+    }
   }
+  return turnAccepted;
 }
 
 async function stopTurn() {
@@ -2852,7 +3131,10 @@ function handleNotification(message) {
       }
     }
 
-    if (!isBackground && isTrackedTurn) finishVisibleTurn(turn);
+    if (!isBackground && isTrackedTurn) {
+      finishVisibleTurn(turn);
+      scheduleNextQueuedPrompt(threadId);
+    }
     renderThreadList();
     updateAttentionUi();
     refreshThreads();
@@ -3619,6 +3901,7 @@ elements.imageInput.addEventListener("change", () => {
 elements.conversation.addEventListener(
   "scroll",
   () => {
+    hideSelectionAsk();
     updateScrollState();
     scheduleUserMessageNavigationUpdate();
   },
@@ -3688,6 +3971,15 @@ elements.sendMessage.addEventListener("click", () => {
     void sendPrompt();
   }
 });
+elements.promptQueueItems.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-queue-action]");
+  const row = action?.closest("[data-queue-id]");
+  if (!action || !row) return;
+  removeQueuedPrompt(row.dataset.queueId, {
+    edit: action.dataset.queueAction === "edit",
+  });
+});
+elements.promptQueueClear.addEventListener("click", clearPromptQueue);
 elements.stopTurn.addEventListener("click", stopTurn);
 elements.newChat.addEventListener("click", () => newChat());
 elements.threadList.addEventListener("click", (event) => {
@@ -3709,6 +4001,15 @@ elements.settingsForm.addEventListener("submit", (event) => event.preventDefault
 elements.settingsCancel.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsClose.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsDialog.addEventListener("close", updateSettingsUi);
+for (const input of document.querySelectorAll('input[name="accent-palette"]')) {
+  input.addEventListener("change", () => {
+    if (!input.checked) return;
+    for (const candidate of document.querySelectorAll('input[name="accent-palette"]')) {
+      candidate.checked = candidate === input;
+    }
+    applyPalette(input.value);
+  });
+}
 elements.providerSelect.addEventListener("change", () => {
   const provider = elements.providerSelect.value;
   updateSettingsProviderUi(provider);
@@ -3753,13 +4054,28 @@ document.addEventListener("pointerdown", primeCompletionAudio, {
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest(".composer")) closeSlashCommandMenu(true);
 });
+document.addEventListener("selectionchange", scheduleSelectionAskUpdate);
+elements.messages.addEventListener("pointerup", scheduleSelectionAskUpdate);
+elements.selectionAsk.addEventListener("pointerdown", (event) => event.preventDefault());
+elements.selectionAsk.addEventListener("click", () => {
+  const text = state.selectedAssistantText;
+  if (!text) return;
+  insertAssistantQuote(text);
+  window.getSelection?.()?.removeAllRanges?.();
+  hideSelectionAsk();
+});
 document.addEventListener("keydown", primeCompletionAudio, {
   capture: true,
   once: true,
 });
-window.addEventListener("resize", scheduleUserMessageNavigationUpdate, {
-  passive: true,
-});
+window.addEventListener(
+  "resize",
+  () => {
+    hideSelectionAsk();
+    scheduleUserMessageNavigationUpdate();
+  },
+  { passive: true },
+);
 window.addEventListener("popstate", (event) => {
   void hydrateThreadFromUrl({
     draftId:
@@ -3776,6 +4092,31 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 elements.messages.addEventListener("click", async (event) => {
+  const messageAction = event.target.closest("[data-message-action]");
+  if (messageAction) {
+    const row = messageAction.closest(".message-row.assistant");
+    const view = row ? state.itemViews.get(row.dataset.itemId) : null;
+    const text = view?.text || row?.querySelector(".message-content")?.textContent || "";
+    if (!text) return;
+    if (messageAction.dataset.messageAction === "quote") {
+      insertAssistantQuote(text);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      const label = messageAction.querySelector("span");
+      messageAction.classList.add("success");
+      if (label) label.textContent = "کپی شد";
+      setTimeout(() => {
+        messageAction.classList.remove("success");
+        if (label) label.textContent = "کپی";
+      }, 1200);
+    } catch {
+      toast("کپی‌کردن ممکن نبود.", "error");
+    }
+    return;
+  }
+
   const button = event.target.closest(".copy-code");
   if (!button) return;
   const code = button.parentElement.querySelector("code")?.textContent || "";

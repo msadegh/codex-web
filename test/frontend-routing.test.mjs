@@ -672,6 +672,39 @@ test("plan step text can shrink and wrap unbroken paths on narrow viewports", as
   assert.match(rule, /overflow-wrap:\s*anywhere/);
 });
 
+test("conversation typography keeps ChatGPT-like readable dimensions", async () => {
+  const styles = await readFile(STYLES, "utf8");
+  const root = styles.match(/:root\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const page = styles.match(/html,\s*body\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const assistant =
+    styles.match(/\.assistant \.message-content\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const messages = styles.match(/\.messages\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+
+  assert.match(root, /--bg:\s*#212121/);
+  assert.match(root, /--text:\s*#ececec/);
+  assert.match(page, /font-size:\s*16px/);
+  assert.match(page, /line-height:\s*1\.75/);
+  assert.match(assistant, /font-size:\s*1rem/);
+  assert.match(assistant, /line-height:\s*1\.75/);
+  assert.match(messages, /width:\s*min\(48rem,/);
+  assert.match(composer, /width:\s*min\(48rem,/);
+});
+
+test("failed technical activity chips stay visually neutral", async () => {
+  const styles = await readFile(STYLES, "utf8");
+  const failedSummary =
+    styles.match(/\.activity-card\.failed summary\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const failedIcon =
+    styles.match(/\.activity-card\.failed summary::before\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+
+  assert.match(failedSummary, /color:\s*var\(--muted\)/);
+  assert.match(failedSummary, /background:\s*var\(--panel-2\)/);
+  assert.doesNotMatch(failedSummary, /--danger/);
+  assert.match(failedIcon, /color:\s*var\(--muted-2\)/);
+  assert.match(failedIcon, /content:\s*"›"/);
+});
+
 test(
   "cancelling a provider switch restores model options and provider-specific safety UI",
   { concurrency: false },
@@ -814,6 +847,174 @@ test(
       false,
     );
     assert.equal(prompt.value, "/compact");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "busy conversations queue, edit, remove, and automatically send prompts in order",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "queue-thread",
+      name: "Queue test",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const starts = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      if (request.method === "turn/start") {
+        starts.push(request.params);
+        return jsonResponse({
+          result: {
+            turn: {
+              id: `queue-turn-${starts.length}`,
+              status: "inProgress",
+              items: [],
+              error: null,
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=queue-thread",
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === "Queue test",
+      "queue thread was not hydrated",
+    );
+
+    typePrompt(window, "پیام اول");
+    document.querySelector("#send-message").click();
+    await waitFor(() => starts.length === 1, "first prompt was not started");
+
+    typePrompt(window, "پیام دوم با تصویر /tmp/reference.png");
+    document.querySelector("#send-message").click();
+    typePrompt(window, "پیام سوم");
+    document.querySelector("#send-message").click();
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 2);
+    assert.equal(document.querySelector("#prompt").value, "");
+    assert.equal(document.querySelector("#send-message").title, "افزودن به صف");
+
+    document
+      .querySelector(".prompt-queue-item [data-queue-action='edit']")
+      .click();
+    assert.match(document.querySelector("#prompt").value, /reference\.png/);
+    document.querySelector("#prompt").value += " ویرایش‌شده";
+    document.querySelector("#prompt").dispatchEvent(new window.Event("input", { bubbles: true }));
+    document.querySelector("#send-message").click();
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 2);
+    document
+      .querySelector(".prompt-queue-item [data-queue-action='remove']")
+      .click();
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 1);
+
+    FakeEventSource.latest.emit("rpc", {
+      method: "turn/completed",
+      params: {
+        threadId: thread.id,
+        turn: { id: "queue-turn-1", status: "completed", items: [], error: null },
+      },
+    });
+    await waitFor(() => starts.length === 2, "queued prompt did not start automatically");
+    assert.equal(starts[1].input[0].text, "پیام دوم با تصویر /tmp/reference.png ویرایش‌شده");
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 0);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "assistant actions quote responses and palette previews revert or persist correctly",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "actions-thread",
+      name: "Actions test",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [
+        {
+          id: "actions-turn",
+          status: "completed",
+          items: [
+            { id: "assistant-actions", type: "agentMessage", text: "خط اول\nخط دوم" },
+          ],
+        },
+      ],
+    };
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { values, window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=actions-thread",
+      savedSettings: {
+        cwd: "/workspace",
+        modelByProvider: { codex: "", claude: "" },
+        palette: "red",
+        provider: "codex",
+        version: 5,
+      },
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("[data-item-id='assistant-actions']"),
+      "assistant action response was not rendered",
+    );
+    document
+      .querySelector("[data-item-id='assistant-actions'] [data-message-action='quote']")
+      .click();
+    assert.equal(document.querySelector("#prompt").value, "> خط اول\n> خط دوم\n\n");
+
+    assert.equal(document.documentElement.dataset.palette, "red");
+    document.querySelector("#open-settings").click();
+    const purple = document.querySelector("input[name='accent-palette'][value='purple']");
+    purple.checked = true;
+    purple.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(document.documentElement.dataset.palette, "purple");
+    document.querySelector("#settings-cancel").click();
+    assert.equal(document.documentElement.dataset.palette, "red");
+
+    document.querySelector("#open-settings").click();
+    const green = document.querySelector("input[name='accent-palette'][value='green']");
+    green.checked = true;
+    green.dispatchEvent(new window.Event("change", { bubbles: true }));
+    document.querySelector("#save-settings").click();
+    assert.equal(document.documentElement.dataset.palette, "green");
+    assert.equal(JSON.parse(values.get("codex-web-settings")).palette, "green");
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );
