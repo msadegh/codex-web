@@ -9,6 +9,7 @@ import { parseHTML } from "linkedom";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const APP = join(ROOT, "public", "app.js");
 const INDEX = join(ROOT, "public", "index.html");
+const ICON = join(ROOT, "public", "icon.svg");
 const STYLES = join(ROOT, "public", "styles.css");
 
 class FakeEventSource {
@@ -689,6 +690,22 @@ test("conversation typography keeps ChatGPT-like readable dimensions", async () 
   assert.match(assistant, /line-height:\s*1\.75/);
   assert.match(messages, /width:\s*min\(48rem,/);
   assert.match(composer, /width:\s*min\(48rem,/);
+});
+
+test("favicon and in-app marks share a palette-aware terminal logo", async () => {
+  const [index, icon, styles] = await Promise.all([
+    readFile(INDEX, "utf8"),
+    readFile(ICON, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+
+  assert.match(index, /rel="icon" href="\/icon\.svg\?v=2"[^>]+sizes="any"/);
+  assert.equal((index.match(/class="brand-logo"/g) || []).length, 2);
+  assert.match(icon, /id="neon"/);
+  assert.match(icon, /#42e8ff/);
+  assert.match(icon, /#9b6dff/);
+  assert.doesNotMatch(icon, /#d8ff6b/);
+  assert.match(styles, /\.brand-logo\s*\{[^}]*stroke:\s*currentcolor/s);
 });
 
 test("failed technical activity chips stay visually neutral", async () => {

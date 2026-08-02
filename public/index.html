@@ -10,14 +10,19 @@
       content="رابط وب لوکال برای Codex CLI با پشتیبانی درست از متن فارسی و انگلیسی"
     />
     <title>Codex Web</title>
-    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icon.svg?v=2" type="image/svg+xml" sizes="any" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar" id="sidebar" aria-label="گفتگوها">
         <div class="brand-row">
-          <div class="brand-mark" aria-hidden="true">C</div>
+          <div class="brand-mark" aria-hidden="true">
+            <svg class="brand-logo" viewBox="0 0 64 64">
+              <path d="m18.5 20.5 11.5 11.5-11.5 11.5" />
+              <path d="M34 43.5h12" />
+            </svg>
+          </div>
           <div>
             <strong>Codex Web</strong>
             <span>روی همین دستگاه</span>
@@ -91,7 +96,12 @@
 
         <section class="conversation" id="conversation" aria-live="polite">
           <div class="welcome" id="welcome">
-            <div class="welcome-mark">✦</div>
+            <div class="welcome-mark" aria-hidden="true">
+              <svg class="brand-logo" viewBox="0 0 64 64">
+                <path d="m18.5 20.5 11.5 11.5-11.5 11.5" />
+                <path d="M34 43.5h12" />
+              </svg>
+            </div>
             <h2 id="welcome-title">امروز روی چی کار کنیم؟</h2>
             <p id="welcome-description">
               کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.

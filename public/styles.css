@@ -204,11 +204,21 @@ textarea:focus-visible {
 .brand-mark,
 .welcome-mark {
   display: grid;
+  overflow: hidden;
+  flex: 0 0 auto;
   place-items: center;
   color: var(--accent-ink);
   background: var(--neon-gradient);
-  font-family: var(--mono);
-  font-weight: 900;
+}
+
+.brand-logo {
+  width: 72%;
+  height: 72%;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 6;
 }
 
 .brand-mark {
@@ -219,7 +229,6 @@ textarea:focus-visible {
   box-shadow:
     0 0 22px rgb(var(--accent-rgb) / 0.2),
     0 0 32px rgb(var(--violet-rgb) / 0.1);
-  font-size: 1rem;
 }
 
 .icon-button {
@@ -661,8 +670,6 @@ textarea:focus-visible {
   box-shadow:
     0 0 34px rgb(var(--accent-rgb) / 0.24),
     0 0 54px rgb(var(--violet-rgb) / 0.14);
-  font-family: system-ui, sans-serif;
-  font-size: 1.45rem;
 }
 
 .welcome h2 {
