@@ -703,6 +703,62 @@ test("feature UI preserves the original Codex Web theme and conversation dimensi
   assert.doesNotMatch(app, /applyPalette|ACCENT_PALETTES/);
 });
 
+test(
+  "sidebar toggle stays simple, accessible, and persistent",
+  { concurrency: false },
+  async (t) => {
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const { method } = JSON.parse(options.body);
+      if (method === "model/list" || method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    };
+
+    const { values, window } = await createHarness(t, {
+      fetchHandler,
+      savedSettings: {
+        cwd: "/workspace",
+        modelByProvider: { codex: "", claude: "" },
+        provider: "codex",
+        sidebarCollapsed: true,
+        version: 5,
+      },
+    });
+    const { document } = window;
+    const menu = document.querySelector("#menu-button");
+    const close = document.querySelector("#sidebar-close");
+    const sidebar = document.querySelector("#sidebar");
+
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), true);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "true");
+    assert.equal(sidebar.hasAttribute("inert"), true);
+    assert.equal(menu.getAttribute("aria-expanded"), "false");
+    assert.equal(document.querySelectorAll(".sidebar-toggle-icon").length, 2);
+
+    menu.click();
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), false);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "false");
+    assert.equal(sidebar.hasAttribute("inert"), false);
+    assert.equal(menu.getAttribute("aria-expanded"), "true");
+    assert.equal(JSON.parse(values.get("codex-web-settings")).sidebarCollapsed, false);
+
+    document.querySelector("#new-chat").click();
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), false);
+
+    close.click();
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), true);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "true");
+    assert.equal(JSON.parse(values.get("codex-web-settings")).sidebarCollapsed, true);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
 test("favicon and in-app marks use the new terminal logo in the original theme", async () => {
   const [index, icon, styles] = await Promise.all([
     readFile(INDEX, "utf8"),

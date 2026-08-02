@@ -38,6 +38,8 @@ many terminals.
   server-side paths into the prompt.
 - Queues follow-up prompts while a turn is running and can quote a selected
   part of an assistant response back into the composer.
+- Lets you collapse the conversation-history sidebar and remembers that simple
+  workspace preference.
 - Jumps between your own messages, keeps long streams readable, and offers a
   one-click jump to the bottom.
 - Plays one completion sound for foreground and background conversations.

@@ -256,6 +256,7 @@ const elements = {
   settingsClose: $("#settings-close"),
   settingsDialog: $("#settings-dialog"),
   settingsForm: $("#settings-form"),
+  sidebar: $("#sidebar"),
   sidebarClose: $("#sidebar-close"),
   slashCommandEmpty: $("#slash-command-empty"),
   slashCommandMenu: $("#slash-command-menu"),
@@ -288,6 +289,7 @@ const defaultSettings = {
   personality: "",
   provider: "codex",
   sandbox: "",
+  sidebarCollapsed: false,
 };
 
 const SETTINGS_VERSION = 5;
@@ -382,6 +384,7 @@ function loadSettings() {
         savedSettings.claudePermissionMode || defaultSettings.claudePermissionMode,
       modelByProvider,
       provider: savedSettings.provider === "claude" ? "claude" : defaultSettings.provider,
+      sidebarCollapsed: savedSettings.sidebarCollapsed === true,
     };
   } catch {
     return { ...defaultSettings };
@@ -1645,6 +1648,7 @@ function saveSettings() {
     personality: elements.personalitySelect.value,
     provider,
     sandbox: elements.sandboxSelect.value,
+    sidebarCollapsed: state.settings.sidebarCollapsed,
   };
   persistSettings();
   state.models = state.modelsByProvider[provider] || [];
@@ -4575,12 +4579,49 @@ function resizePrompt() {
   updateComposerControls();
 }
 
+function sidebarUsesOverlay() {
+  return window.matchMedia?.("(max-width: 820px)").matches ?? false;
+}
+
+function updateSidebarUi() {
+  const overlay = sidebarUsesOverlay();
+  const open = overlay
+    ? document.body.classList.contains("sidebar-open")
+    : !state.settings.sidebarCollapsed;
+  document.body.classList.toggle(
+    "sidebar-collapsed",
+    !overlay && state.settings.sidebarCollapsed,
+  );
+  elements.sidebar.setAttribute("aria-hidden", String(!open));
+  elements.sidebar.toggleAttribute("inert", !open);
+  elements.menuButton.setAttribute("aria-expanded", String(open));
+  elements.sidebarClose.setAttribute("aria-expanded", String(open));
+}
+
 function openSidebar() {
-  document.body.classList.add("sidebar-open");
+  if (sidebarUsesOverlay()) {
+    document.body.classList.add("sidebar-open");
+  } else if (state.settings.sidebarCollapsed) {
+    state.settings.sidebarCollapsed = false;
+    persistSettings();
+  }
+  updateSidebarUi();
 }
 
 function closeSidebar() {
   document.body.classList.remove("sidebar-open");
+  updateSidebarUi();
+}
+
+function collapseSidebar() {
+  if (sidebarUsesOverlay()) {
+    closeSidebar();
+  } else {
+    state.settings.sidebarCollapsed = true;
+    persistSettings();
+    updateSidebarUi();
+  }
+  elements.menuButton.focus();
 }
 
 let searchTimer;
@@ -4756,7 +4797,7 @@ elements.sandboxSelect.addEventListener("change", () =>
   updateFullAccessWarning(elements.providerSelect.value),
 );
 elements.menuButton.addEventListener("click", openSidebar);
-elements.sidebarClose.addEventListener("click", closeSidebar);
+elements.sidebarClose.addEventListener("click", collapseSidebar);
 elements.mobileScrim.addEventListener("click", closeSidebar);
 elements.approvalAccept.addEventListener("click", () => answerInteraction("accept"));
 elements.approvalSession.addEventListener("click", () => answerInteraction("session"));
@@ -4811,6 +4852,7 @@ window.addEventListener(
   () => {
     hideSelectionAsk();
     scheduleUserMessageNavigationUpdate();
+    updateSidebarUi();
   },
   { passive: true },
 );
@@ -4876,6 +4918,7 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 });
 
 async function initialize() {
+  updateSidebarUi();
   updateSettingsUi();
   updateConnection();
   resizePrompt();

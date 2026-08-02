@@ -26,7 +26,20 @@
             <strong>Codex Web</strong>
             <span>روی همین دستگاه</span>
           </div>
-          <button class="icon-button sidebar-close" id="sidebar-close" aria-label="بستن فهرست">×</button>
+          <button
+            class="icon-button sidebar-close"
+            id="sidebar-close"
+            type="button"
+            aria-label="بستن نوار گفتگوها"
+            aria-controls="sidebar"
+            aria-expanded="true"
+            title="بستن نوار گفتگوها"
+          >
+            <svg class="sidebar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <path d="M15 4v16" />
+            </svg>
+          </button>
         </div>
 
         <button class="new-chat-button" id="new-chat">
@@ -52,7 +65,20 @@
 
       <main class="main-panel">
         <header class="topbar">
-          <button class="icon-button menu-button" id="menu-button" aria-label="نمایش گفتگوها">☰</button>
+          <button
+            class="icon-button menu-button"
+            id="menu-button"
+            type="button"
+            aria-label="بازکردن نوار گفتگوها"
+            aria-controls="sidebar"
+            aria-expanded="false"
+            title="بازکردن نوار گفتگوها"
+          >
+            <svg class="sidebar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <path d="M15 4v16" />
+            </svg>
+          </button>
           <div class="thread-heading">
             <h1 id="thread-title">گفتگوی تازه</h1>
             <div class="thread-meta" id="thread-meta" dir="ltr"></div>
