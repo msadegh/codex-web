@@ -45,7 +45,7 @@ Environment:
   CODEX_WEB_PORT            HTTP port (default: 4173)
   CODEX_WEB_CWD             Default working directory (default: current directory)
   CODEX_WEB_NO_OPEN=1       Do not open a browser automatically
-  CODEX_WEB_UPLOAD_DIR      Image upload cache directory
+  CODEX_WEB_UPLOAD_DIR      Image and audio upload cache directory
   CODEX_BIN                 Codex executable (default: codex)
   CLAUDE_BIN                Claude Code executable (default: claude)
   CLAUDE_CONFIG_DIR         Claude Code config/session directory (default: ~/.claude)
@@ -70,6 +70,7 @@ const { serverArgs: CODEX_ARGS, threadDefaults: CLI_THREAD_DEFAULTS } =
 const SHOULD_OPEN = !process.argv.includes("--no-open") && process.env.CODEX_WEB_NO_OPEN !== "1";
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const CACHE_HOME =
   process.env.XDG_CACHE_HOME ||
   (process.platform === "win32" && process.env.LOCALAPPDATA) ||
@@ -90,9 +91,19 @@ const IMAGE_TYPES = new Map([
   ["image/bmp", ".bmp"],
 ]);
 
+const AUDIO_TYPES = new Map([
+  ["audio/webm", ".webm"],
+  ["audio/ogg", ".ogg"],
+  ["audio/mp4", ".m4a"],
+  ["audio/mpeg", ".mp3"],
+  ["audio/wav", ".wav"],
+  ["audio/x-wav", ".wav"],
+]);
+
 const RPC_ALLOWLIST = new Set([
   "account/read",
   "account/rateLimits/read",
+  "collaborationMode/list",
   "model/list",
   "thread/list",
   "thread/read",
@@ -102,6 +113,9 @@ const RPC_ALLOWLIST = new Set([
   "thread/unarchive",
   "thread/compact/start",
   "thread/setName",
+  "thread/goal/set",
+  "thread/goal/get",
+  "thread/goal/clear",
   "turn/start",
   "turn/steer",
   "turn/interrupt",
@@ -342,6 +356,17 @@ function requestImageType(req) {
   return type;
 }
 
+function requestAudioType(req) {
+  const contentType = req.headers["content-type"] || "";
+  const type = contentType.split(";", 1)[0].trim().toLowerCase();
+  if (!AUDIO_TYPES.has(type)) {
+    const error = new Error("Content-Type must be a supported audio type");
+    error.status = 415;
+    throw error;
+  }
+  return type;
+}
+
 function requestImageName(req) {
   const header = req.headers["x-file-name"];
   if (typeof header !== "string" || !header || header.length > 1024) {
@@ -403,6 +428,41 @@ async function readImage(req) {
   return Buffer.concat(chunks, size);
 }
 
+async function readAudio(req) {
+  const contentLength = req.headers["content-length"];
+  if (contentLength !== undefined) {
+    const declaredSize = Number(contentLength);
+    if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+      const error = new Error("Content-Length is invalid");
+      error.status = 400;
+      throw error;
+    }
+    if (declaredSize > MAX_AUDIO_BYTES) {
+      const error = new Error("Audio is larger than 25 MiB");
+      error.status = 413;
+      throw error;
+    }
+  }
+
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_AUDIO_BYTES) {
+      const error = new Error("Audio is larger than 25 MiB");
+      error.status = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  if (size === 0) {
+    const error = new Error("Audio body is empty");
+    error.status = 400;
+    throw error;
+  }
+  return Buffer.concat(chunks, size);
+}
+
 function imageBytesMatchType(type, bytes) {
   if (type === "image/png") {
     return (
@@ -441,6 +501,35 @@ function imageBytesMatchType(type, bytes) {
   return false;
 }
 
+function audioBytesMatchType(type, bytes) {
+  if (type === "audio/webm") {
+    return (
+      bytes.length >= 4 &&
+      bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))
+    );
+  }
+  if (type === "audio/ogg") {
+    return bytes.length >= 4 && bytes.toString("ascii", 0, 4) === "OggS";
+  }
+  if (type === "audio/wav" || type === "audio/x-wav") {
+    return (
+      bytes.length >= 12 &&
+      bytes.toString("ascii", 0, 4) === "RIFF" &&
+      bytes.toString("ascii", 8, 12) === "WAVE"
+    );
+  }
+  if (type === "audio/mp4") {
+    return bytes.length >= 12 && bytes.toString("ascii", 4, 8) === "ftyp";
+  }
+  if (type === "audio/mpeg") {
+    return (
+      (bytes.length >= 3 && bytes.toString("ascii", 0, 3) === "ID3") ||
+      (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)
+    );
+  }
+  return false;
+}
+
 function imageUploadName(originalName, type) {
   const originalExtension = extname(originalName);
   const originalStem = originalName.slice(0, originalName.length - originalExtension.length);
@@ -457,6 +546,24 @@ function imageUploadName(originalName, type) {
     safeStemBytes += characterBytes;
   }
   return `${randomUUID()}-${safeStem || "image"}${IMAGE_TYPES.get(type)}`;
+}
+
+function audioUploadName(originalName, type) {
+  const originalExtension = extname(originalName);
+  const originalStem = originalName.slice(0, originalName.length - originalExtension.length);
+  const sanitizedStem = originalStem
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
+    .replace(/^[._-]+|[._-]+$/g, "");
+  let safeStem = "";
+  let safeStemBytes = 0;
+  for (const character of sanitizedStem) {
+    const characterBytes = Buffer.byteLength(character);
+    if (safeStemBytes + characterBytes > 160) break;
+    safeStem += character;
+    safeStemBytes += characterBytes;
+  }
+  return `${randomUUID()}-${safeStem || "voice"}${AUDIO_TYPES.get(type)}`;
 }
 
 function isSameOrigin(req) {
@@ -834,6 +941,27 @@ const server = createServer(async (req, res) => {
       await mkdir(UPLOAD_DIR, { recursive: true, mode: 0o700 });
       await chmod(UPLOAD_DIR, 0o700);
       const name = imageUploadName(originalName, type);
+      const path = join(UPLOAD_DIR, name);
+      try {
+        await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if (error.code !== "EEXIST") await unlink(path).catch(() => {});
+        throw error;
+      }
+      return json(res, 201, { path, name, size: bytes.length, type });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/uploads/audio") {
+      const type = requestAudioType(req);
+      const originalName = requestImageName(req);
+      const bytes = await readAudio(req);
+      if (!audioBytesMatchType(type, bytes)) {
+        return json(res, 415, { error: "Audio bytes do not match Content-Type" });
+      }
+
+      await mkdir(UPLOAD_DIR, { recursive: true, mode: 0o700 });
+      await chmod(UPLOAD_DIR, 0o700);
+      const name = audioUploadName(originalName, type);
       const path = join(UPLOAD_DIR, name);
       try {
         await writeFile(path, bytes, { flag: "wx", mode: 0o600 });

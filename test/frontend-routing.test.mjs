@@ -461,6 +461,7 @@ test(
       name: "New thread",
       turns: [],
     };
+    const threadStarts = [];
     const fetchHandler = async (path, options = {}) => {
       if (path === "/api/status") {
         return jsonResponse({
@@ -473,7 +474,7 @@ test(
         });
       }
       if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
-      const { method } = JSON.parse(options.body);
+      const { method, params } = JSON.parse(options.body);
       if (method === "model/list") return jsonResponse({ result: { data: [] } });
       if (method === "thread/list") {
         return jsonResponse({ result: { data: [oldSummary], nextCursor: null } });
@@ -484,6 +485,7 @@ test(
         });
       }
       if (method === "thread/start") {
+        threadStarts.push(params);
         return jsonResponse({ result: { thread: newThread, cwd: "/workspace" } });
       }
       if (method === "turn/start") {
@@ -549,6 +551,10 @@ test(
     assert.equal(finalUrl.searchParams.get("thread"), null);
     assert.equal(finalUrl.searchParams.get("layout"), "wide");
     assert.equal(finalUrl.hash, "#composer");
+    assert.match(
+      threadStarts[0].developerInstructions,
+      /short descriptive headings, bullet lists, or numbered steps/,
+    );
   },
 );
 
@@ -681,6 +687,12 @@ test("conversation typography keeps ChatGPT-like readable dimensions", async () 
     styles.match(/\.assistant \.message-content\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const messages = styles.match(/\.messages\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const headings =
+    styles.match(
+      /\.message-content h1,\s*\.message-content h2,\s*\.message-content h3\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body || "";
+  const listMarker =
+    styles.match(/\.message-content li::marker\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
 
   assert.match(root, /--bg:\s*#212121/);
   assert.match(root, /--text:\s*#ececec/);
@@ -690,6 +702,10 @@ test("conversation typography keeps ChatGPT-like readable dimensions", async () 
   assert.match(assistant, /line-height:\s*1\.75/);
   assert.match(messages, /width:\s*min\(48rem,/);
   assert.match(composer, /width:\s*min\(48rem,/);
+  assert.match(headings, /font-weight:\s*700/);
+  assert.match(headings, /text-wrap:\s*pretty/);
+  assert.match(listMarker, /color:\s*var\(--muted-2\)/);
+  assert.doesNotMatch(listMarker, /accent|danger|warning/);
 });
 
 test("favicon and in-app marks share a palette-aware terminal logo", async () => {
@@ -1054,6 +1070,311 @@ test(
     document.querySelector("#save-settings").click();
     assert.equal(document.documentElement.dataset.palette, "green");
     assert.equal(JSON.parse(values.get("codex-web-settings")).palette, "green");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "Plan and Goal modes use native Codex RPC fields and expose goal controls",
+  { concurrency: false },
+  async (t) => {
+    const requests = [];
+    const turns = [];
+    let objective = "";
+    let goalStatus = "active";
+    const thread = {
+      id: "mode-thread",
+      name: "Mode test",
+      cwd: "/workspace",
+      provider: "codex",
+      status: { type: "idle" },
+      turns: [],
+    };
+    const goal = () => ({
+      createdAt: 1,
+      objective,
+      status: goalStatus,
+      threadId: thread.id,
+      timeUsedSeconds: 0,
+      tokenBudget: null,
+      tokensUsed: 0,
+      updatedAt: 1,
+    });
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      if (request.method === "model/list") {
+        return jsonResponse({
+          result: {
+            data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }],
+          },
+        });
+      }
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({
+          result: { data: [{ name: "Plan", mode: "plan", reasoning_effort: "medium" }] },
+        });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") return jsonResponse({ result: { thread } });
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: objective ? goal() : null } });
+      }
+      if (request.method === "thread/goal/set") {
+        if (request.params.objective) objective = request.params.objective;
+        if (request.params.status) goalStatus = request.params.status;
+        return jsonResponse({ result: { goal: goal() } });
+      }
+      if (request.method === "thread/goal/clear") {
+        objective = "";
+        return jsonResponse({ result: { cleared: true } });
+      }
+      if (request.method === "turn/start") {
+        turns.push(request.params);
+        return jsonResponse({
+          result: {
+            turn: { id: "mode-turn", status: "inProgress", items: [], error: null },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      savedSettings: {
+        cwd: "/workspace",
+        modelByProvider: { codex: "", claude: "" },
+        palette: "cyan",
+        provider: "codex",
+        version: 5,
+      },
+    });
+    const document = window.document;
+    await waitFor(
+      () => requests.some((request) => request.method === "collaborationMode/list"),
+      "collaboration modes were not loaded",
+    );
+
+    document.querySelector("#composer-tools").click();
+    document.querySelector("#plan-mode-option").click();
+    assert.equal(document.querySelector("#plan-mode-option").getAttribute("aria-checked"), "true");
+    assert.equal(document.querySelector("#composer-tool-label").textContent, "Plan");
+
+    document.querySelector("#composer-tools").click();
+    document.querySelector("#goal-mode-option").click();
+    assert.equal(document.querySelector("#goal-dialog").open, true);
+    document.querySelector("#goal-input").value = "همهٔ تست‌ها را سبز کن";
+    document
+      .querySelector("#goal-form")
+      .dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    assert.equal(document.querySelector("#prompt").value, "همهٔ تست‌ها را سبز کن");
+    assert.equal(document.querySelector("#goal-progress").classList.contains("hidden"), false);
+
+    document.querySelector("#goal-edit").click();
+    document.querySelector("#goal-input").value = "تمام تست‌ها را سبز کن";
+    document
+      .querySelector("#goal-form")
+      .dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    assert.equal(document.querySelector("#prompt").value, "تمام تست‌ها را سبز کن");
+
+    document.querySelector("#send-message").click();
+    await waitFor(() => turns.length === 1, "Plan turn was not started");
+    assert.equal(turns[0].input[0].text, "تمام تست‌ها را سبز کن");
+    assert.deepEqual(turns[0].collaborationMode, {
+      mode: "plan",
+      settings: {
+        developer_instructions: null,
+        model: "gpt-test",
+        reasoning_effort: "medium",
+      },
+    });
+    assert.equal(turns[0].developerInstructions, undefined);
+    const threadStart = requests.find((request) => request.method === "thread/start");
+    assert.equal(threadStart.params.developerInstructions, undefined);
+    const methods = requests.map((request) => request.method);
+    assert.equal(methods.indexOf("thread/goal/set") < methods.indexOf("turn/start"), true);
+
+    document.querySelector("#goal-toggle").click();
+    await waitFor(
+      () => document.querySelector("#goal-progress").dataset.status === "paused",
+      "Goal was not paused",
+    );
+    assert.equal(document.querySelector("#goal-progress").dataset.status, "paused");
+
+    document.querySelector("#goal-clear").click();
+    await waitFor(
+      () => document.querySelector("#goal-progress").classList.contains("hidden"),
+      "Goal was not cleared",
+    );
+    assert.equal(document.querySelector("#goal-progress").classList.contains("hidden"), true);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "Dictation inserts editable Persian speech into the composer",
+  { concurrency: false },
+  async (t) => {
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+    const { window } = await createHarness(t, { fetchHandler });
+    class FakeSpeechRecognition {
+      static latest = null;
+      constructor() {
+        FakeSpeechRecognition.latest = this;
+      }
+      start() {}
+      stop() {
+        this.onend?.();
+      }
+    }
+    window.SpeechRecognition = FakeSpeechRecognition;
+    const document = window.document;
+    typePrompt(window, "مقدمه");
+    document.querySelector("#dictate").click();
+    assert.equal(document.querySelector("#dictate").classList.contains("active"), true);
+    const result = [{ transcript: "این متن با صدا نوشته شد" }];
+    result.isFinal = true;
+    FakeSpeechRecognition.latest.onresult({ results: [result] });
+    assert.equal(
+      document.querySelector("#prompt").value,
+      "مقدمه این متن با صدا نوشته شد",
+    );
+    document.querySelector("#dictate").click();
+    assert.equal(document.querySelector("#dictate").classList.contains("active"), false);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "recorded voice uploads securely and starts a localAudio turn",
+  { concurrency: false },
+  async (t) => {
+    const turns = [];
+    let audioUploads = 0;
+    let threadListLoaded = false;
+    const thread = {
+      id: "voice-thread",
+      name: "Voice test",
+      cwd: "/workspace",
+      provider: "codex",
+      status: { type: "idle" },
+      turns: [],
+    };
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/uploads/audio") {
+        audioUploads += 1;
+        assert.equal(options.headers["Content-Type"], "audio/webm");
+        return jsonResponse({ path: "C:\\voice\\message.webm", type: "audio/webm" }, 201);
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        threadListLoaded = true;
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") return jsonResponse({ result: { thread } });
+      if (request.method === "thread/goal/get") return jsonResponse({ result: { goal: null } });
+      if (request.method === "turn/start") {
+        turns.push(request.params);
+        return jsonResponse({
+          result: {
+            turn: { id: "voice-turn", status: "inProgress", items: [], error: null },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+    const { window } = await createHarness(t, { fetchHandler });
+    let trackStopped = false;
+    let microphoneRequests = 0;
+    let recorderStarts = 0;
+    let recorderStops = 0;
+    const mediaDevices = {
+      async getUserMedia() {
+        microphoneRequests += 1;
+        return { getTracks: () => [{ stop: () => (trackStopped = true) }] };
+      },
+    };
+    Object.defineProperty(window.navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+    class FakeMediaRecorder {
+      static isTypeSupported(type) {
+        return type.startsWith("audio/webm");
+      }
+      constructor(stream, options = {}) {
+        this.stream = stream;
+        this.mimeType = options.mimeType || "audio/webm";
+        this.state = "inactive";
+      }
+      start() {
+        recorderStarts += 1;
+        this.state = "recording";
+      }
+      stop() {
+        recorderStops += 1;
+        this.state = "inactive";
+        this.ondataavailable?.({
+          data: new Blob([Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3])], {
+            type: "audio/webm",
+          }),
+        });
+        this.onstop?.();
+      }
+    }
+    Object.defineProperty(window, "MediaRecorder", {
+      configurable: true,
+      value: FakeMediaRecorder,
+    });
+    assert.equal(window.MediaRecorder, FakeMediaRecorder);
+    const document = window.document;
+    await waitFor(() => threadListLoaded, "initial thread list was not loaded");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitFor(() => !document.querySelector("#record-voice").disabled, "voice button stayed disabled");
+    document
+      .querySelector("#record-voice")
+      .dispatchEvent(new window.Event("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(document.querySelector("#toasts").textContent.trim(), "");
+    assert.equal(microphoneRequests, 1);
+    assert.equal(recorderStarts, 1);
+    assert.equal(recorderStops, 0);
+    assert.equal(document.querySelector("#voice-recorder").className, "voice-recorder");
+    await waitFor(
+      () => !document.querySelector("#voice-recorder").classList.contains("hidden"),
+      "voice recorder did not open",
+    );
+    document.querySelector("#voice-send").click();
+    await waitFor(() => turns.length === 1, "voice turn was not started");
+    assert.equal(audioUploads, 1);
+    assert.deepEqual(turns[0].input, [
+      { type: "localAudio", path: "C:\\voice\\message.webm" },
+    ]);
+    assert.equal(trackStopped, true);
+    assert.match(document.querySelector(".message-row.user .message-content").textContent, /پیام صوتی/);
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );

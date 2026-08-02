@@ -6,7 +6,11 @@ const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
 const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
+const MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_VOICE_RECORDING_MS = 10 * 60 * 1000;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const RESPONSE_STYLE_INSTRUCTIONS =
+  "Make final responses easy to scan. When useful, use short descriptive headings, bullet lists, or numbered steps. Keep simple answers simple, use compact paragraphs, and avoid unnecessary sections, repetitive summaries, or decorative formatting.";
 const IMAGE_EXTENSIONS = {
   "image/avif": "avif",
   "image/bmp": "bmp",
@@ -15,8 +19,26 @@ const IMAGE_EXTENSIONS = {
   "image/png": "png",
   "image/webp": "webp",
 };
+const AUDIO_EXTENSIONS = {
+  "audio/mp4": "m4a",
+  "audio/mpeg": "mp3",
+  "audio/ogg": "ogg",
+  "audio/webm": "webm",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+};
 
 const SLASH_COMMANDS = [
+  {
+    name: "goal",
+    label: "Goal mode",
+    description: "تعیین هدفی که Codex در چند نوبت تا رسیدن به نتیجه پیگیری کند",
+  },
+  {
+    name: "plan",
+    label: "Plan mode",
+    description: "روشن یا خاموش‌کردن حالت بررسی و برنامه‌ریزی قبل از اجرا",
+  },
   {
     name: "compact",
     label: "فشرده‌سازی گفتگو",
@@ -169,14 +191,35 @@ const elements = {
   approvalSelect: $("#approval-select"),
   connectionLabel: $("#connection-label"),
   composerHint: $("#composer-hint"),
+  composerToolLabel: $("#composer-tool-label"),
+  composerTools: $("#composer-tools"),
+  composerToolsMenu: $("#composer-tools-menu"),
+  composerToolsNote: $("#composer-tools-note"),
   conversation: $("#conversation"),
   cwdChip: $("#cwd-chip"),
   cwdInput: $("#cwd-input"),
   cwdLabel: $("#cwd-label"),
+  dictate: $("#dictate"),
   effortSelect: $("#effort-select"),
   fullAccessWarning: $("#full-access-warning"),
   headerSettings: $("#header-settings"),
   imageInput: $("#image-input"),
+  goalClear: $("#goal-clear"),
+  goalDialog: $("#goal-dialog"),
+  goalDialogCancel: $("#goal-dialog-cancel"),
+  goalDialogClose: $("#goal-dialog-close"),
+  goalDialogHelp: $("#goal-dialog-help"),
+  goalDialogTitle: $("#goal-dialog-title"),
+  goalEdit: $("#goal-edit"),
+  goalForm: $("#goal-form"),
+  goalInput: $("#goal-input"),
+  goalModeOption: $("#goal-mode-option"),
+  goalObjective: $("#goal-objective"),
+  goalProgress: $("#goal-progress"),
+  goalSave: $("#goal-save"),
+  goalStatus: $("#goal-status"),
+  goalToggle: $("#goal-toggle"),
+  goalUsage: $("#goal-usage"),
   inputDialog: $("#input-dialog"),
   inputForm: $("#input-request-form"),
   inputContext: $("#input-context"),
@@ -194,6 +237,7 @@ const elements = {
   nextUserMessage: $("#next-user-message"),
   openSettings: $("#open-settings"),
   personalitySelect: $("#personality-select"),
+  planModeOption: $("#plan-mode-option"),
   providerSelect: $("#provider-select"),
   claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
@@ -202,6 +246,7 @@ const elements = {
   promptQueueClear: $("#prompt-queue-clear"),
   promptQueueCount: $("#prompt-queue-count"),
   promptQueueItems: $("#prompt-queue-items"),
+  recordVoice: $("#record-voice"),
   sandboxSelect: $("#sandbox-select"),
   saveSettings: $("#save-settings"),
   scrollBottom: $("#scroll-bottom"),
@@ -225,6 +270,10 @@ const elements = {
   toasts: $("#toasts"),
   uploadStatus: $("#upload-status"),
   userMessageNavigationStatus: $("#user-message-navigation-status"),
+  voiceCancel: $("#voice-cancel"),
+  voiceRecorder: $("#voice-recorder"),
+  voiceRecorderTimer: $("#voice-recorder-timer"),
+  voiceSend: $("#voice-send"),
   welcome: $("#welcome"),
   welcomeDescription: $("#welcome-description"),
   welcomeTitle: $("#welcome-title"),
@@ -247,16 +296,25 @@ const ACCENT_PALETTES = new Set(["cyan", "red", "purple", "green"]);
 
 const state = {
   activeInteractionKey: null,
+  audioUploading: false,
   busy: false,
+  collaborationModes: [],
   completedTurns: new Set(),
   compactPendingThreads: new Set(),
+  composerModes: new Map(),
   connected: false,
   currentThread: null,
   currentThreadId: null,
   currentTurnId: null,
+  dictationBase: "",
+  dictationFinal: "",
+  dictationRecognition: null,
   drafts: new Map(),
   eventSource: null,
   followOutput: true,
+  goals: new Map(),
+  goalLoadingThreads: new Set(),
+  goalSaving: false,
   itemViews: new Map(),
   navigationVersion: 0,
   models: [],
@@ -267,6 +325,7 @@ const state = {
   notifiedTurns: new Set(),
   optimisticUserMessages: new Map(),
   pendingInteractions: new Map(),
+  pendingGoals: new Map(),
   pendingTurnStarts: 0,
   postponedInteractions: new Set(),
   promptQueues: new Map(),
@@ -299,6 +358,14 @@ const state = {
   userMessageHighlightTimer: null,
   userMessageNavigationFrame: null,
   userNavigationItemId: null,
+  voiceChunks: [],
+  voiceDiscard: false,
+  voiceElapsedTimer: null,
+  voiceMediaRecorder: null,
+  voiceRequestId: 0,
+  voiceStarting: false,
+  voiceStartedAt: 0,
+  voiceStream: null,
 };
 
 function loadSettings() {
@@ -440,6 +507,9 @@ function parseSlashCommand(text) {
 
 function slashCommandAvailability(command) {
   if (state.navigating) return { available: false, reason: "تا پایان بازشدن گفتگو صبر کنید." };
+  if (["goal", "plan"].includes(command.name) && effectiveProvider() !== "codex") {
+    return { available: false, reason: "این حالت فقط برای گفتگوهای Codex در دسترس است." };
+  }
   if (state.slashCommandExecuting && command.name === "compact") {
     return { available: false, reason: "یک فرمان دیگر در حال اجراست." };
   }
@@ -766,6 +836,14 @@ async function executeSlashCommand(command) {
 
   const targetDraftKey = draftKey();
   switch (command.name) {
+    case "goal":
+      clearSlashCommandText(command.token, targetDraftKey);
+      openGoalDialog();
+      return;
+    case "plan":
+      clearSlashCommandText(command.token, targetDraftKey);
+      togglePlanMode();
+      return;
     case "compact":
       await runCompactSlashCommand(command);
       return;
@@ -1062,9 +1140,288 @@ function imageUploadsForDraft(key = draftKey()) {
   return state.imageUploadsByDraft.get(key) || 0;
 }
 
+function speechRecognitionConstructor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function setDictationActive(active) {
+  elements.dictate.classList.toggle("active", active);
+  elements.dictate.setAttribute("aria-pressed", String(active));
+  elements.dictate.title = active ? "پایان دیکته" : "دیکته (Ctrl+Shift+D)";
+}
+
+function stopDictation() {
+  const recognition = state.dictationRecognition;
+  if (!recognition) return false;
+  try {
+    recognition.stop();
+  } catch {
+    try {
+      recognition.abort();
+    } catch {
+      // Recognition may already have ended.
+    }
+  }
+  return true;
+}
+
+function toggleDictation() {
+  if (state.dictationRecognition) {
+    stopDictation();
+    return;
+  }
+  const SpeechRecognition = speechRecognitionConstructor();
+  if (!SpeechRecognition) {
+    toast("مرورگر شما Dictation را پشتیبانی نمی‌کند؛ Chrome یا Edge جدید را امتحان کنید.", "warning", {
+      duration: 7000,
+    });
+    return;
+  }
+  if (state.voiceMediaRecorder?.state === "recording") {
+    toast("ابتدا ضبط پیام صوتی را تمام کنید.", "warning");
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.lang = "fa-IR";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  state.dictationBase = elements.prompt.value;
+  state.dictationFinal = "";
+  state.dictationRecognition = recognition;
+
+  recognition.onresult = (event) => {
+    let finalText = "";
+    let interimText = "";
+    for (let index = 0; index < event.results.length; index += 1) {
+      const result = event.results[index];
+      const transcript = result?.[0]?.transcript || "";
+      if (result?.isFinal) finalText += transcript;
+      else interimText += transcript;
+    }
+    state.dictationFinal = finalText.trim();
+    const spoken = [state.dictationFinal, interimText.trim()].filter(Boolean).join(" ");
+    const separator = state.dictationBase && spoken && !/\s$/.test(state.dictationBase) ? " " : "";
+    elements.prompt.value = `${state.dictationBase}${separator}${spoken}`;
+    elements.prompt.setSelectionRange(elements.prompt.value.length, elements.prompt.value.length);
+    saveCurrentDraft();
+    resizePrompt();
+  };
+  recognition.onerror = (event) => {
+    if (!["aborted", "no-speech"].includes(event.error)) {
+      const permission = event.error === "not-allowed" || event.error === "service-not-allowed";
+      toast(
+        permission
+          ? "اجازهٔ میکروفون برای Dictation داده نشد."
+          : `Dictation متوقف شد: ${event.error || "خطای ناشناخته"}`,
+        "error",
+      );
+    }
+  };
+  recognition.onend = () => {
+    if (state.dictationRecognition !== recognition) return;
+    state.dictationRecognition = null;
+    setDictationActive(false);
+    saveCurrentDraft();
+    resizePrompt();
+  };
+
+  try {
+    recognition.start();
+    setDictationActive(true);
+  } catch (error) {
+    state.dictationRecognition = null;
+    setDictationActive(false);
+    showError(error, "شروع Dictation");
+  }
+}
+
+function preferredAudioMimeType() {
+  const MediaRecorderApi = window.MediaRecorder;
+  if (!MediaRecorderApi) return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/mp4",
+  ];
+  return candidates.find((type) => MediaRecorderApi.isTypeSupported?.(type)) || "";
+}
+
+function formatVoiceTime(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function stopVoiceTracks() {
+  for (const track of state.voiceStream?.getTracks?.() || []) track.stop();
+  state.voiceStream = null;
+}
+
+async function uploadAudio(blob) {
+  const type = String(blob.type || "").split(";", 1)[0].toLowerCase();
+  if (!Object.hasOwn(AUDIO_EXTENSIONS, type)) {
+    throw new Error("فرمت صدای ضبط‌شده پشتیبانی نمی‌شود.");
+  }
+  if (!blob.size) throw new Error("صدای ضبط‌شده خالی است.");
+  if (blob.size > MAX_AUDIO_UPLOAD_BYTES) {
+    throw new Error("حجم پیام صوتی باید حداکثر ۲۵ مگابایت باشد.");
+  }
+  const name = `voice-${Date.now()}.${AUDIO_EXTENSIONS[type]}`;
+  const response = await fetch("/api/uploads/audio", {
+    method: "POST",
+    headers: {
+      "Content-Type": type,
+      "X-File-Name": encodeURIComponent(name),
+    },
+    body: blob,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (
+    typeof data.path !== "string" ||
+    (!data.path.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(data.path))
+  ) {
+    throw new Error("سرور مسیر معتبری برای صدا برنگرداند.");
+  }
+  return data.path;
+}
+
+async function sendVoiceBlob(blob) {
+  state.audioUploading = true;
+  updateComposerControls();
+  try {
+    const path = await uploadAudio(blob);
+    const sent = await sendPrompt("", {
+      input: [{ type: "localAudio", path }],
+    });
+    if (!sent) throw new Error("پیام صوتی در این لحظه قابل ارسال نیست.");
+  } catch (error) {
+    showError(error, "ارسال پیام صوتی");
+  } finally {
+    state.audioUploading = false;
+    updateComposerControls();
+  }
+}
+
+async function finishVoiceRecording(mimeType) {
+  const send = !state.voiceDiscard;
+  const chunks = state.voiceChunks;
+  state.voiceChunks = [];
+  state.voiceMediaRecorder = null;
+  state.voiceDiscard = false;
+  clearInterval(state.voiceElapsedTimer);
+  state.voiceElapsedTimer = null;
+  stopVoiceTracks();
+  elements.voiceRecorder.classList.add("hidden");
+  elements.voiceRecorderTimer.textContent = "00:00";
+  elements.recordVoice.classList.remove("active");
+  elements.recordVoice.setAttribute("aria-pressed", "false");
+  updateComposerControls();
+  if (!send) return;
+  const blob = new Blob(chunks, { type: mimeType || chunks[0]?.type || "audio/webm" });
+  await sendVoiceBlob(blob);
+}
+
+function stopVoiceRecording(send = true) {
+  const recorder = state.voiceMediaRecorder;
+  if (!recorder) {
+    if (!state.voiceStarting) return false;
+    state.voiceRequestId += 1;
+    state.voiceStarting = false;
+    updateComposerControls();
+    return true;
+  }
+  state.voiceDiscard = !send;
+  if (recorder.state !== "inactive") recorder.stop();
+  return true;
+}
+
+async function startVoiceRecording() {
+  if (effectiveProvider() !== "codex") {
+    toast("ارسال پیام صوتی فعلاً فقط برای Codex در دسترس است.", "warning");
+    return;
+  }
+  if (state.busy) {
+    toast("بعد از پایان پاسخ فعلی، ضبط پیام صوتی را شروع کنید.", "warning");
+    return;
+  }
+  if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
+    toast("مرورگر شما ضبط پیام صوتی را پشتیبانی نمی‌کند.", "warning");
+    return;
+  }
+  if (state.voiceMediaRecorder || state.voiceStarting) return;
+  stopDictation();
+  state.voiceStarting = true;
+  const requestId = ++state.voiceRequestId;
+  updateComposerControls();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (
+      requestId !== state.voiceRequestId ||
+      state.navigating ||
+      effectiveProvider() !== "codex"
+    ) {
+      for (const track of stream.getTracks?.() || []) track.stop();
+      return;
+    }
+    state.voiceStream = stream;
+    const mimeType = preferredAudioMimeType();
+    const recorder = new window.MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    state.voiceMediaRecorder = recorder;
+    state.voiceChunks = [];
+    state.voiceDiscard = false;
+    state.voiceStartedAt = Date.now();
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) state.voiceChunks.push(event.data);
+    };
+    recorder.onerror = (event) => {
+      toast(`ضبط صدا متوقف شد: ${event.error?.message || "خطای ناشناخته"}`, "error");
+      stopVoiceRecording(false);
+    };
+    recorder.onstop = () => void finishVoiceRecording(recorder.mimeType || mimeType);
+    recorder.start(250);
+    elements.voiceRecorder.classList.remove("hidden");
+    elements.recordVoice.classList.add("active");
+    elements.recordVoice.setAttribute("aria-pressed", "true");
+    elements.voiceRecorderTimer.textContent = "00:00";
+    clearInterval(state.voiceElapsedTimer);
+    state.voiceElapsedTimer = setInterval(() => {
+      const elapsed = Date.now() - state.voiceStartedAt;
+      elements.voiceRecorderTimer.textContent = formatVoiceTime(elapsed);
+      if (elapsed >= MAX_VOICE_RECORDING_MS) {
+        toast("سقف ۱۰ دقیقه‌ای ضبط رسید؛ پیام در حال ارسال است.", "warning");
+        stopVoiceRecording(true);
+      }
+    }, 250);
+    updateComposerControls();
+  } catch (error) {
+    if (requestId !== state.voiceRequestId) return;
+    state.voiceMediaRecorder = null;
+    state.voiceChunks = [];
+    stopVoiceTracks();
+    elements.voiceRecorder.classList.add("hidden");
+    elements.recordVoice.classList.remove("active");
+    elements.recordVoice.setAttribute("aria-pressed", "false");
+    const denied = error?.name === "NotAllowedError" || error?.name === "SecurityError";
+    toast(
+      denied ? "اجازهٔ دسترسی به میکروفون داده نشد." : `شروع ضبط ممکن نبود: ${error.message}`,
+      "error",
+      { duration: 7000 },
+    );
+  } finally {
+    if (requestId === state.voiceRequestId) state.voiceStarting = false;
+    updateComposerControls();
+  }
+}
+
 function updateComposerControls() {
   const uploadingImages = imageUploadsForDraft();
-  const uploading = uploadingImages > 0;
+  const uploading = uploadingImages > 0 || state.audioUploading;
+  const recording = state.voiceMediaRecorder?.state === "recording";
   const text = elements.prompt.value.trim();
   const slash = parseSlashCommand(elements.prompt.value);
   const slashCanRun =
@@ -1075,7 +1432,7 @@ function updateComposerControls() {
   const queueMode = state.busy && !slash;
   elements.sendMessage.disabled = slash
     ? !slashCanRun
-    : !state.connected || state.navigating || uploading || !text;
+    : !state.connected || state.navigating || uploading || recording || !text;
   elements.sendMessage.classList.toggle("queue-mode", queueMode);
   elements.sendMessage.setAttribute(
     "aria-label",
@@ -1087,11 +1444,22 @@ function updateComposerControls() {
     : "Enter برای ارسال · Shift+Enter برای خط جدید";
   elements.addImages.disabled = state.navigating || uploading;
   elements.imageInput.disabled = state.navigating || uploading;
-  elements.uploadStatus.textContent =
-    uploadingImages > 1
+  elements.composerTools.disabled = state.navigating || recording;
+  elements.dictate.disabled = state.navigating || recording;
+  elements.recordVoice.disabled =
+    !state.connected ||
+    state.navigating ||
+    uploading ||
+    state.voiceStarting ||
+    state.busy ||
+    effectiveProvider() !== "codex";
+  elements.uploadStatus.textContent = state.audioUploading
+    ? "در حال ارسال صدا…"
+    : uploadingImages > 1
       ? `در حال افزودن ${uploadingImages.toLocaleString("fa-IR")} تصویر…`
       : "در حال افزودن تصویر…";
   elements.uploadStatus.classList.toggle("hidden", !uploading);
+  updateComposerModeUi();
   updateSlashCommandMenu();
 }
 
@@ -1180,7 +1548,12 @@ function setBusy(busy, turnId = null) {
 
 function setNavigating(navigating) {
   state.navigating = navigating;
-  if (navigating) closeSlashCommandMenu();
+  if (navigating) {
+    closeSlashCommandMenu();
+    closeComposerToolsMenu();
+    stopDictation();
+    stopVoiceRecording(false);
+  }
   elements.prompt.disabled = navigating;
   updateConnection();
   updateComposerControls();
@@ -1663,6 +2036,320 @@ function draftKey(threadId = state.currentThreadId) {
   return threadId || `${NEW_THREAD_DRAFT_PREFIX}:${state.newDraftId}`;
 }
 
+function composerModeFor(key = draftKey()) {
+  return state.composerModes.get(key) || "default";
+}
+
+function goalFor(key = draftKey()) {
+  return state.pendingGoals.get(key) || state.goals.get(key) || null;
+}
+
+function closeComposerToolsMenu() {
+  elements.composerToolsMenu.classList.add("hidden");
+  elements.composerTools.setAttribute("aria-expanded", "false");
+}
+
+function updateComposerModeUi() {
+  const provider = effectiveProvider();
+  const codex = provider === "codex";
+  const plan = codex && composerModeFor() === "plan";
+  const goal = codex ? goalFor() : null;
+  elements.planModeOption.disabled = !codex;
+  elements.goalModeOption.disabled = !codex;
+  elements.planModeOption.setAttribute("aria-checked", String(plan));
+  elements.composerToolsNote.classList.toggle("hidden", codex);
+  elements.composerTools.classList.toggle("active-mode", Boolean(plan || goal));
+  elements.composerToolLabel.textContent = plan ? "Plan" : goal ? "Goal" : "ابزارها";
+  elements.composerTools.title = !codex
+    ? "Plan و Goal فقط برای Codex در دسترس‌اند"
+    : plan
+      ? "Plan mode روشن است"
+      : goal
+        ? "Goal فعال است"
+        : "حالت‌ها و هدف";
+}
+
+function toggleComposerToolsMenu() {
+  const opening = elements.composerToolsMenu.classList.contains("hidden");
+  closeSlashCommandMenu();
+  elements.composerToolsMenu.classList.toggle("hidden", !opening);
+  elements.composerTools.setAttribute("aria-expanded", String(opening));
+}
+
+function togglePlanMode() {
+  if (effectiveProvider() !== "codex") {
+    toast("Plan mode فقط در گفتگوهای Codex در دسترس است.", "warning");
+    return false;
+  }
+  const key = draftKey();
+  const plan = composerModeFor(key) !== "plan";
+  if (plan) state.composerModes.set(key, "plan");
+  else state.composerModes.delete(key);
+  updateComposerModeUi();
+  closeComposerToolsMenu();
+  toast(plan ? "Plan mode روشن شد." : "Plan mode خاموش شد.", "success");
+  return plan;
+}
+
+function effectivePlanModel() {
+  const selected = state.settings.modelByProvider.codex || "";
+  if (selected) return selected;
+  const runtime = state.currentThreadId
+    ? state.threadRuntime.get(state.currentThreadId) || {}
+    : {};
+  if (runtime.model) return runtime.model;
+  if (state.currentThread?.model) return state.currentThread.model;
+  const models = state.modelsByProvider.codex || [];
+  const fallback = models.find((model) => model.isDefault) || models[0];
+  return fallback?.model || fallback?.id || "";
+}
+
+function planCollaborationMode() {
+  const template =
+    state.collaborationModes.find((mode) => mode.mode === "plan") || {};
+  const model = effectivePlanModel() || template.model || "";
+  if (!model) return null;
+  return {
+    mode: "plan",
+    settings: {
+      developer_instructions: null,
+      model,
+      reasoning_effort:
+        template.reasoning_effort || state.settings.effort || "medium",
+    },
+  };
+}
+
+async function loadCollaborationModes() {
+  try {
+    const result = await rpc("collaborationMode/list", {});
+    state.collaborationModes = Array.isArray(result?.data) ? result.data : [];
+  } catch {}
+}
+
+const GOAL_STATUS_LABELS = {
+  active: "فعال",
+  paused: "مکث",
+  blocked: "متوقف",
+  usageLimited: "محدودیت مصرف",
+  budgetLimited: "پایان بودجه",
+  complete: "کامل",
+};
+
+function formatGoalUsage(goal) {
+  const parts = [];
+  if (Number.isFinite(goal?.tokensUsed) && goal.tokensUsed > 0) {
+    const tokens = goal.tokensUsed.toLocaleString("fa-IR");
+    parts.push(
+      Number.isFinite(goal.tokenBudget) && goal.tokenBudget > 0
+        ? `${tokens} از ${goal.tokenBudget.toLocaleString("fa-IR")} توکن`
+        : `${tokens} توکن`,
+    );
+  }
+  if (Number.isFinite(goal?.timeUsedSeconds) && goal.timeUsedSeconds > 0) {
+    const minutes = Math.max(1, Math.round(goal.timeUsedSeconds / 60));
+    parts.push(`${minutes.toLocaleString("fa-IR")} دقیقه`);
+  }
+  return parts.join(" · ");
+}
+
+function renderGoalProgress() {
+  const goal = effectiveProvider() === "codex" ? goalFor() : null;
+  elements.goalProgress.classList.toggle("hidden", !goal);
+  if (!goal) {
+    elements.goalProgress.removeAttribute("data-status");
+    elements.goalObjective.textContent = "";
+    elements.goalUsage.classList.add("hidden");
+    updateComposerModeUi();
+    return;
+  }
+
+  const status = goal.status || "active";
+  elements.goalProgress.dataset.status = status;
+  elements.goalObjective.textContent = goal.objective || "";
+  elements.goalObjective.title = goal.objective || "";
+  elements.goalStatus.textContent = goal.pending
+    ? "با اولین ارسال فعال می‌شود"
+    : GOAL_STATUS_LABELS[status] || status;
+  const usage = formatGoalUsage(goal);
+  elements.goalUsage.textContent = usage;
+  elements.goalUsage.classList.toggle("hidden", !usage);
+
+  const paused = status !== "active";
+  elements.goalToggle.disabled = Boolean(goal.pending || status === "complete" || state.goalSaving);
+  elements.goalEdit.disabled = state.goalSaving;
+  elements.goalClear.disabled = state.goalSaving;
+  elements.goalToggle.setAttribute(
+    "aria-label",
+    paused ? "ادامهٔ هدف" : "مکث هدف",
+  );
+  elements.goalToggle.title = paused ? "ادامهٔ هدف" : "مکث هدف";
+  elements.goalToggle.innerHTML = paused
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5z" /></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10m6-10v10" /></svg>';
+  updateComposerModeUi();
+}
+
+async function loadGoal(threadId) {
+  if (!threadId || providerForThread(threadId) !== "codex") return null;
+  if (state.goalLoadingThreads.has(threadId)) return null;
+  state.goalLoadingThreads.add(threadId);
+  try {
+    const result = await rpc("thread/goal/get", { threadId });
+    if (result?.goal) state.goals.set(threadId, result.goal);
+    else state.goals.delete(threadId);
+    if (state.currentThreadId === threadId) renderGoalProgress();
+    return result?.goal || null;
+  } catch {
+    return null;
+  } finally {
+    state.goalLoadingThreads.delete(threadId);
+  }
+}
+
+function openGoalDialog() {
+  closeComposerToolsMenu();
+  if (effectiveProvider() !== "codex") {
+    toast("Goal mode فقط در گفتگوهای Codex در دسترس است.", "warning");
+    return;
+  }
+  const goal = goalFor();
+  elements.goalInput.value = goal?.objective || "";
+  elements.goalDialogTitle.textContent = goal ? "ویرایش هدف" : "یک هدف تعیین کن";
+  elements.goalSave.textContent = goal ? "ذخیرهٔ هدف" : "شروع Goal";
+  elements.goalDialogHelp.textContent = state.currentThreadId
+    ? "تغییر هدف از همین گفتگو ادامه پیدا می‌کند."
+    : "هدف با اولین ارسال روی گفتگوی تازه فعال می‌شود.";
+  elements.goalDialog.showModal();
+  elements.goalInput.focus();
+}
+
+async function saveGoalFromDialog(event) {
+  event.preventDefault();
+  if (state.goalSaving) return;
+  const objective = elements.goalInput.value.trim();
+  if (!objective) {
+    elements.goalInput.focus();
+    return;
+  }
+  const key = draftKey();
+  if (!state.currentThreadId) {
+    const previous = goalFor(key);
+    const replaceGeneratedPrompt =
+      !elements.prompt.value.trim() ||
+      (previous?.pending && elements.prompt.value.trim() === previous.objective);
+    state.pendingGoals.set(key, {
+      objective,
+      pending: true,
+      status: "active",
+      timeUsedSeconds: 0,
+      tokensUsed: 0,
+    });
+    if (replaceGeneratedPrompt) {
+      elements.prompt.value = objective;
+      saveCurrentDraft();
+      resizePrompt();
+    }
+    elements.goalDialog.close();
+    renderGoalProgress();
+    elements.prompt.focus();
+    return;
+  }
+
+  state.goalSaving = true;
+  elements.goalSave.disabled = true;
+  renderGoalProgress();
+  try {
+    const current = goalFor();
+    const status = ["active", "paused"].includes(current?.status)
+      ? current.status
+      : "active";
+    const result = await rpc("thread/goal/set", {
+      threadId: state.currentThreadId,
+      objective,
+      status,
+    });
+    if (result?.goal) state.goals.set(state.currentThreadId, result.goal);
+    elements.goalDialog.close();
+    toast("هدف گفتگو ذخیره شد.", "success");
+  } catch (error) {
+    showError(error, "ذخیرهٔ هدف");
+  } finally {
+    state.goalSaving = false;
+    elements.goalSave.disabled = false;
+    renderGoalProgress();
+  }
+}
+
+async function toggleGoalStatus() {
+  const threadId = state.currentThreadId;
+  const goal = goalFor();
+  if (!threadId || !goal || goal.pending || state.goalSaving) return;
+  const status = goal.status === "active" ? "paused" : "active";
+  state.goalSaving = true;
+  renderGoalProgress();
+  try {
+    const result = await rpc("thread/goal/set", { threadId, status });
+    if (result?.goal) state.goals.set(threadId, result.goal);
+    toast(status === "paused" ? "Goal موقتاً متوقف شد." : "Goal دوباره فعال شد.", "success");
+  } catch (error) {
+    showError(error, status === "paused" ? "مکث هدف" : "ادامهٔ هدف");
+  } finally {
+    state.goalSaving = false;
+    renderGoalProgress();
+  }
+}
+
+async function clearGoal() {
+  const key = draftKey();
+  if (!state.currentThreadId) {
+    state.pendingGoals.delete(key);
+    renderGoalProgress();
+    return;
+  }
+  if (!goalFor() || state.goalSaving) return;
+  const threadId = state.currentThreadId;
+  state.goalSaving = true;
+  renderGoalProgress();
+  try {
+    await rpc("thread/goal/clear", { threadId });
+    state.goals.delete(threadId);
+    state.pendingGoals.delete(threadId);
+    toast("Goal از گفتگو برداشته شد.", "success");
+  } catch (error) {
+    showError(error, "پاک‌کردن هدف");
+  } finally {
+    state.goalSaving = false;
+    renderGoalProgress();
+  }
+}
+
+function migrateComposerState(sourceKey, targetKey) {
+  if (!sourceKey || sourceKey === targetKey) return;
+  if (state.composerModes.has(sourceKey)) {
+    state.composerModes.set(targetKey, state.composerModes.get(sourceKey));
+    state.composerModes.delete(sourceKey);
+  }
+  if (state.pendingGoals.has(sourceKey)) {
+    state.pendingGoals.set(targetKey, state.pendingGoals.get(sourceKey));
+    state.pendingGoals.delete(sourceKey);
+  }
+}
+
+async function activatePendingGoal(threadId) {
+  const pending = state.pendingGoals.get(threadId);
+  if (!pending) return null;
+  const result = await rpc("thread/goal/set", {
+    threadId,
+    objective: pending.objective,
+    status: "active",
+  });
+  if (result?.goal) state.goals.set(threadId, result.goal);
+  state.pendingGoals.delete(threadId);
+  if (state.currentThreadId === threadId) renderGoalProgress();
+  return result?.goal || null;
+}
+
 function promptQueueFor(key = draftKey(), create = false) {
   if (!state.promptQueues.has(key) && create) state.promptQueues.set(key, []);
   return state.promptQueues.get(key) || [];
@@ -1794,6 +2481,7 @@ function restoreDraft(threadId = state.currentThreadId) {
   elements.prompt.value = state.drafts.get(draftKey(threadId)) || "";
   state.slashDismissedValue = null;
   renderPromptQueue();
+  renderGoalProgress();
   resizePrompt();
 }
 
@@ -1932,6 +2620,8 @@ function newChat({ draftId = null, historyMode = "push" } = {}) {
     return false;
   }
   saveCurrentDraft();
+  stopDictation();
+  stopVoiceRecording(false);
   state.navigationVersion += 1;
   closeInteractionDialogs();
   state.openingThreadId = null;
@@ -1985,6 +2675,7 @@ function setCurrentThread(thread, metadata = {}) {
   renderThreadList();
   activateThreadInteractions(thread.id);
   updateConnection();
+  void loadGoal(thread.id);
 }
 
 function itemText(item) {
@@ -1993,7 +2684,7 @@ function itemText(item) {
       .map((part) => {
         if (part.type === "text") return part.text;
         if (part.type === "image" || part.type === "localImage") return `[تصویر: ${part.path || part.url}]`;
-        if (part.type === "audio" || part.type === "localAudio") return `[صدا: ${part.path || part.url}]`;
+        if (part.type === "audio" || part.type === "localAudio") return "🎙️ پیام صوتی";
         if (part.type === "skill") return `$${part.name}`;
         if (part.type === "mention") return `@${part.name}`;
         return "";
@@ -2739,6 +3430,9 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
     provider: state.settings.provider,
   };
   if (state.settings.provider === "codex") {
+    if (composerModeFor(sourceDraftKey) !== "plan") {
+      params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
+    }
     if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
     if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
     if (state.settings.personality) params.personality = state.settings.personality;
@@ -2754,6 +3448,7 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
     state.threads.unshift(result.thread);
   }
   migratePromptQueue(sourceDraftKey, result.thread.id);
+  migrateComposerState(sourceDraftKey, result.thread.id);
   if (state.drafts.has(sourceDraftKey)) {
     state.drafts.set(result.thread.id, state.drafts.get(sourceDraftKey));
     state.drafts.delete(sourceDraftKey);
@@ -2776,15 +3471,25 @@ function turnEventKey(threadId, turnId) {
   return `${threadId}:${turnId}`;
 }
 
-async function sendPrompt(text = elements.prompt.value, { fromQueue = false } = {}) {
-  if (parseSlashCommand(text)) {
+async function sendPrompt(
+  text = elements.prompt.value,
+  { fromQueue = false, input: providedInput = null } = {},
+) {
+  const structuredInput =
+    Array.isArray(providedInput) && providedInput.length ? providedInput : null;
+  if (!structuredInput && parseSlashCommand(text)) {
     return Boolean(await handleSlashCommand(text));
   }
-  text = text.trim();
-  if (!text || !state.connected || state.navigating || imageUploadsForDraft() > 0) {
+  text = String(text || "").trim();
+  const input = structuredInput || (text ? [{ type: "text", text }] : []);
+  if (!input.length || !state.connected || state.navigating || imageUploadsForDraft() > 0) {
     return false;
   }
   if (state.busy) {
+    if (structuredInput) {
+      toast("پیام صوتی را بعد از پایان پاسخ فعلی بفرستید.", "warning");
+      return false;
+    }
     if (fromQueue) return false;
     enqueuePrompt(text);
     return true;
@@ -2794,8 +3499,7 @@ async function sendPrompt(text = elements.prompt.value, { fromQueue = false } = 
   const navigationVersion = state.navigationVersion;
   let targetThreadId = sourceThreadId;
   const clientUserMessageId = crypto.randomUUID();
-  const input = [{ type: "text", text }];
-  if (!fromQueue) {
+  if (!fromQueue && !structuredInput) {
     elements.prompt.value = "";
     state.drafts.set(sourceDraftKey, "");
     resizePrompt();
@@ -2820,6 +3524,7 @@ async function sendPrompt(text = elements.prompt.value, { fromQueue = false } = 
       sourceDraftKey,
     );
     targetThreadId = threadId;
+    await activatePendingGoal(threadId);
     const provider =
       state.currentThreadId === threadId && state.currentThread?.provider
         ? state.currentThread.provider
@@ -2830,8 +3535,19 @@ async function sendPrompt(text = elements.prompt.value, { fromQueue = false } = 
       threadId,
       provider,
     };
+    if (provider === "codex" && composerModeFor(threadId) === "plan") {
+      const collaborationMode = planCollaborationMode();
+      if (!collaborationMode) {
+        throw new Error("برای Plan mode ابتدا یک مدل Codex انتخاب یا بارگذاری کنید.");
+      }
+      params.collaborationMode = collaborationMode;
+    }
+    if (provider === "codex" && !params.collaborationMode) {
+      params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
+    }
     if (
       state.settings.effort &&
+      !params.collaborationMode &&
       (provider === "codex" || CLAUDE_EFFORTS.has(state.settings.effort))
     ) {
       params.effort = state.settings.effort;
@@ -2862,7 +3578,7 @@ async function sendPrompt(text = elements.prompt.value, { fromQueue = false } = 
     if (shouldRollback) {
       const restoreThreadId = targetThreadId || sourceThreadId;
       const restoreKey = restoreThreadId ? draftKey(restoreThreadId) : sourceDraftKey;
-      if (!fromQueue) {
+      if (!fromQueue && !structuredInput) {
         const newerDraft = state.drafts.get(restoreKey) || "";
         state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
       }
@@ -2881,7 +3597,7 @@ async function sendPrompt(text = elements.prompt.value, { fromQueue = false } = 
         (!restoreThreadId && draftKey() === sourceDraftKey)
       ) {
         setBusy(false);
-        if (!fromQueue) restoreDraft(restoreThreadId);
+        if (!fromQueue && !structuredInput) restoreDraft(restoreThreadId);
       }
     }
     showError(error, "ارسال پیام");
@@ -3030,6 +3746,20 @@ function handleNotification(message) {
 
   if (method === "thread/tokenUsage/updated" && threadId) {
     state.threadTokenUsage.set(threadId, params.tokenUsage || null);
+    return;
+  }
+
+  if (method === "thread/goal/updated" && threadId) {
+    if (params.goal) state.goals.set(threadId, params.goal);
+    state.pendingGoals.delete(threadId);
+    if (threadId === state.currentThreadId) renderGoalProgress();
+    return;
+  }
+
+  if (method === "thread/goal/cleared" && threadId) {
+    state.goals.delete(threadId);
+    state.pendingGoals.delete(threadId);
+    if (threadId === state.currentThreadId) renderGoalProgress();
     return;
   }
 
@@ -3892,6 +4622,19 @@ elements.prompt.addEventListener("keyup", (event) => {
 });
 elements.prompt.addEventListener("paste", handlePromptPaste);
 elements.addImages.addEventListener("click", () => elements.imageInput.click());
+elements.composerTools.addEventListener("click", toggleComposerToolsMenu);
+elements.planModeOption.addEventListener("click", togglePlanMode);
+elements.goalModeOption.addEventListener("click", openGoalDialog);
+elements.goalEdit.addEventListener("click", openGoalDialog);
+elements.goalToggle.addEventListener("click", () => void toggleGoalStatus());
+elements.goalClear.addEventListener("click", () => void clearGoal());
+elements.goalForm.addEventListener("submit", (event) => void saveGoalFromDialog(event));
+elements.goalDialogCancel.addEventListener("click", () => elements.goalDialog.close());
+elements.goalDialogClose.addEventListener("click", () => elements.goalDialog.close());
+elements.dictate.addEventListener("click", toggleDictation);
+elements.recordVoice.addEventListener("click", () => void startVoiceRecording());
+elements.voiceCancel.addEventListener("click", () => stopVoiceRecording(false));
+elements.voiceSend.addEventListener("click", () => stopVoiceRecording(true));
 elements.imageInput.addEventListener("change", () => {
   const files = [...elements.imageInput.files];
   const targetDraftKey = draftKey();
@@ -3924,6 +4667,12 @@ elements.nextUserMessage.addEventListener("click", () => navigateToUserMessage("
 elements.prompt.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   const slashMenuOpen = !elements.slashCommandMenu.classList.contains("hidden");
+  const toolsMenuOpen = !elements.composerToolsMenu.classList.contains("hidden");
+  if (toolsMenuOpen && event.key === "Escape") {
+    event.preventDefault();
+    closeComposerToolsMenu();
+    return;
+  }
   if (slashMenuOpen && event.key === "Escape") {
     event.preventDefault();
     closeSlashCommandMenu(true);
@@ -3934,9 +4683,19 @@ elements.prompt.addEventListener("keydown", (event) => {
     moveSlashCommandSelection(event.key === "ArrowDown" ? 1 : -1);
     return;
   }
-  if (slashMenuOpen && event.key === "Tab" && state.slashFilteredCommands.length) {
+  if (
+    slashMenuOpen &&
+    event.key === "Tab" &&
+    !event.shiftKey &&
+    state.slashFilteredCommands.length
+  ) {
     event.preventDefault();
     replacePromptWithSlashCommand(state.slashFilteredCommands[state.slashActiveIndex]);
+    return;
+  }
+  if (event.key === "Tab" && event.shiftKey && !slashMenuOpen) {
+    event.preventDefault();
+    togglePlanMode();
     return;
   }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -4053,6 +4812,9 @@ document.addEventListener("pointerdown", primeCompletionAudio, {
 });
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest(".composer")) closeSlashCommandMenu(true);
+  if (!event.target.closest("#composer-tools, #composer-tools-menu")) {
+    closeComposerToolsMenu();
+  }
 });
 document.addEventListener("selectionchange", scheduleSelectionAskUpdate);
 elements.messages.addEventListener("pointerup", scheduleSelectionAskUpdate);
@@ -4067,6 +4829,13 @@ elements.selectionAsk.addEventListener("click", () => {
 document.addEventListener("keydown", primeCompletionAudio, {
   capture: true,
   once: true,
+});
+document.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "d") {
+    event.preventDefault();
+    toggleDictation();
+  }
 });
 window.addEventListener(
   "resize",
@@ -4150,7 +4919,12 @@ async function initialize() {
       updateSettingsUi();
     }
     applyProviderStatusPayload(status);
-    await Promise.allSettled([loadModels(), refreshThreads(), hydrateThreadFromUrl()]);
+    await Promise.allSettled([
+      loadModels(),
+      loadCollaborationModes(),
+      refreshThreads(),
+      hydrateThreadFromUrl(),
+    ]);
   } catch (error) {
     markProviderConnectionsUnavailable("سرور در دسترس نیست");
     showError(error, "اتصال به سرور");

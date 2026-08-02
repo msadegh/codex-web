@@ -279,6 +279,10 @@ test("submitted user message stays visible while the assistant is streaming", as
   assert.equal(typeof clientId, "string");
   assert.notEqual(clientId, "");
   assert.notEqual(clientId, "user-from-server");
+  assert.match(
+    turnStartRequests[0].developerInstructions,
+    /short descriptive headings, bullet lists, or numbered steps/,
+  );
 
   FakeEventSource.latest.emit("rpc", {
     method: "item/agentMessage/delta",
