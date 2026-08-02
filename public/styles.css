@@ -1300,6 +1300,11 @@ body.sidebar-collapsed .menu-button {
   color: var(--muted-2);
 }
 
+.composer textarea:placeholder-shown {
+  direction: rtl;
+  text-align: right;
+}
+
 .composer-footer {
   display: flex;
   min-height: 34px;

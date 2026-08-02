@@ -785,6 +785,8 @@ test("composer redesign and neutral stop control retain the original theme", asy
   const stop = [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
     .map((match) => match.groups?.body || "")
     .join("\n");
+  const placeholder =
+    styles.match(/\.composer textarea:placeholder-shown\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
 
   assert.match(index, /class="context-chip-icon" data-icon="settings"/);
   assert.match(index, /id="stop-turn"[^>]*>[\s\S]*?<rect[^>]+rx="1\.5"/);
@@ -804,6 +806,8 @@ test("composer redesign and neutral stop control retain the original theme", asy
   assert.match(stop, /background:\s*var\(--text\)/);
   assert.match(stop, /border-radius:\s*50%/);
   assert.doesNotMatch(stop, /danger|warning|#4b1728/);
+  assert.match(placeholder, /direction:\s*rtl/);
+  assert.match(placeholder, /text-align:\s*right/);
 });
 
 test(
