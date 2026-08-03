@@ -165,6 +165,23 @@ test("submitted user message stays visible while the assistant is streaming", as
             content: [{ type: "text", text: "پیام قبلی" }],
           },
           {
+            type: "reasoning",
+            id: "reasoning-old",
+            summary: [{ text: "بررسی خلاصه" }],
+          },
+          {
+            type: "reasoning",
+            id: "reasoning-empty",
+            summary: [],
+          },
+          {
+            type: "commandExecution",
+            id: "command-old",
+            command: "pwd",
+            status: "completed",
+            exitCode: 0,
+          },
+          {
             type: "agentMessage",
             id: "agent-old",
             text: "پاسخ قبلی",
@@ -239,6 +256,11 @@ test("submitted user message stays visible while the assistant is streaming", as
     () => document.querySelector("[data-item-id='agent-old']"),
     "thread history was not rendered",
   );
+  assert.equal(document.querySelectorAll(".message-avatar").length, 0);
+  assert.equal(document.querySelector("[data-item-id='reasoning-old']").hasAttribute("open"), false);
+  assert.equal(document.querySelector("[data-item-id='reasoning-old'] summary").textContent, "تفکر");
+  assert.equal(document.querySelector("[data-item-id='reasoning-empty']").hidden, true);
+  assert.equal(document.querySelector("[data-item-id='command-old']").classList.contains("completed"), true);
 
   const prompt = document.querySelector("#prompt");
   prompt.value = "پیام تازه";
@@ -257,6 +279,10 @@ test("submitted user message stays visible while the assistant is streaming", as
   assert.equal(typeof clientId, "string");
   assert.notEqual(clientId, "");
   assert.notEqual(clientId, "user-from-server");
+  assert.match(
+    turnStartRequests[0].developerInstructions,
+    /short descriptive headings, bullet lists, or numbered steps/,
+  );
 
   FakeEventSource.latest.emit("rpc", {
     method: "item/agentMessage/delta",

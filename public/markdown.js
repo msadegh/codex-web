@@ -33,6 +33,10 @@ function inlineMarkdown(value) {
   return text;
 }
 
+function blockDirection(value) {
+  return /[\p{Script=Arabic}\p{Script=Hebrew}]/u.test(value) ? "rtl" : "ltr";
+}
+
 function splitTableRow(rawLine) {
   const line = rawLine.trim();
   const cells = [];
@@ -91,15 +95,12 @@ function normalizeTableRow(cells, columnCount) {
 
 function renderTableCell(tag, value, alignment) {
   const className = alignment ? ` class="align-${alignment}"` : "";
-  return `<${tag} dir="auto"${className}>${inlineMarkdown(escapeHtml(value.trim()))}</${tag}>`;
+  const content = value.trim();
+  return `<${tag} dir="${blockDirection(content)}"${className}>${inlineMarkdown(escapeHtml(content))}</${tag}>`;
 }
 
 function tableDirection(header) {
-  for (const character of header.join(" ")) {
-    if (/[\p{Script=Arabic}\p{Script=Hebrew}]/u.test(character)) return "rtl";
-    if (/[\p{L}\p{N}]/u.test(character)) return "ltr";
-  }
-  return "ltr";
+  return blockDirection(header.join(" "));
 }
 
 function parseTable(lines, startIndex) {
@@ -155,7 +156,8 @@ export function markdown(source) {
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    output.push(`<p dir="auto">${inlineMarkdown(paragraph.join("<br>"))}</p>`);
+    const content = paragraph.join("<br>");
+    output.push(`<p dir="${blockDirection(content)}">${inlineMarkdown(content)}</p>`);
     paragraph = [];
   };
 
@@ -224,21 +226,23 @@ export function markdown(source) {
       flushParagraph();
       closeList();
       const level = heading[1].length;
-      output.push(`<h${level} dir="auto">${inlineMarkdown(heading[2])}</h${level}>`);
+      output.push(
+        `<h${level} dir="${blockDirection(heading[2])}">${inlineMarkdown(heading[2])}</h${level}>`,
+      );
       continue;
     }
 
     const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
     if (bullet) {
       openList("ul");
-      output.push(`<li dir="auto">${inlineMarkdown(bullet[1])}</li>`);
+      output.push(`<li dir="${blockDirection(bullet[1])}">${inlineMarkdown(bullet[1])}</li>`);
       continue;
     }
 
     const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (ordered) {
       openList("ol");
-      output.push(`<li dir="auto">${inlineMarkdown(ordered[1])}</li>`);
+      output.push(`<li dir="${blockDirection(ordered[1])}">${inlineMarkdown(ordered[1])}</li>`);
       continue;
     }
 
@@ -246,7 +250,9 @@ export function markdown(source) {
     if (quote) {
       flushParagraph();
       closeList();
-      output.push(`<blockquote dir="auto">${inlineMarkdown(quote[1])}</blockquote>`);
+      output.push(
+        `<blockquote dir="${blockDirection(quote[1])}">${inlineMarkdown(quote[1])}</blockquote>`,
+      );
       continue;
     }
 

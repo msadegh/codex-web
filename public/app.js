@@ -6,7 +6,11 @@ const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
 const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
+const MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_VOICE_RECORDING_MS = 10 * 60 * 1000;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const RESPONSE_STYLE_INSTRUCTIONS =
+  "Make final responses easy to scan. When useful, use short descriptive headings, bullet lists, or numbered steps. Keep simple answers simple, use compact paragraphs, and avoid unnecessary sections, repetitive summaries, or decorative formatting.";
 const IMAGE_EXTENSIONS = {
   "image/avif": "avif",
   "image/bmp": "bmp",
@@ -15,8 +19,26 @@ const IMAGE_EXTENSIONS = {
   "image/png": "png",
   "image/webp": "webp",
 };
+const AUDIO_EXTENSIONS = {
+  "audio/mp4": "m4a",
+  "audio/mpeg": "mp3",
+  "audio/ogg": "ogg",
+  "audio/webm": "webm",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+};
 
 const SLASH_COMMANDS = [
+  {
+    name: "goal",
+    label: "Goal mode",
+    description: "تعیین هدفی که Codex در چند نوبت تا رسیدن به نتیجه پیگیری کند",
+  },
+  {
+    name: "plan",
+    label: "Plan mode",
+    description: "روشن یا خاموش‌کردن حالت بررسی و برنامه‌ریزی قبل از اجرا",
+  },
   {
     name: "compact",
     label: "فشرده‌سازی گفتگو",
@@ -168,14 +190,36 @@ const elements = {
   approvalTitle: $("#approval-title"),
   approvalSelect: $("#approval-select"),
   connectionLabel: $("#connection-label"),
+  composerHint: $("#composer-hint"),
+  composerToolLabel: $("#composer-tool-label"),
+  composerTools: $("#composer-tools"),
+  composerToolsMenu: $("#composer-tools-menu"),
+  composerToolsNote: $("#composer-tools-note"),
   conversation: $("#conversation"),
   cwdChip: $("#cwd-chip"),
   cwdInput: $("#cwd-input"),
   cwdLabel: $("#cwd-label"),
+  dictate: $("#dictate"),
   effortSelect: $("#effort-select"),
   fullAccessWarning: $("#full-access-warning"),
   headerSettings: $("#header-settings"),
   imageInput: $("#image-input"),
+  goalClear: $("#goal-clear"),
+  goalDialog: $("#goal-dialog"),
+  goalDialogCancel: $("#goal-dialog-cancel"),
+  goalDialogClose: $("#goal-dialog-close"),
+  goalDialogHelp: $("#goal-dialog-help"),
+  goalDialogTitle: $("#goal-dialog-title"),
+  goalEdit: $("#goal-edit"),
+  goalForm: $("#goal-form"),
+  goalInput: $("#goal-input"),
+  goalModeOption: $("#goal-mode-option"),
+  goalObjective: $("#goal-objective"),
+  goalProgress: $("#goal-progress"),
+  goalSave: $("#goal-save"),
+  goalStatus: $("#goal-status"),
+  goalToggle: $("#goal-toggle"),
+  goalUsage: $("#goal-usage"),
   inputDialog: $("#input-dialog"),
   inputForm: $("#input-request-form"),
   inputContext: $("#input-context"),
@@ -193,14 +237,21 @@ const elements = {
   nextUserMessage: $("#next-user-message"),
   openSettings: $("#open-settings"),
   personalitySelect: $("#personality-select"),
+  planModeOption: $("#plan-mode-option"),
   providerSelect: $("#provider-select"),
   claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
   prompt: $("#prompt"),
+  promptQueue: $("#prompt-queue"),
+  promptQueueClear: $("#prompt-queue-clear"),
+  promptQueueCount: $("#prompt-queue-count"),
+  promptQueueItems: $("#prompt-queue-items"),
+  recordVoice: $("#record-voice"),
   sandboxSelect: $("#sandbox-select"),
   saveSettings: $("#save-settings"),
   scrollBottom: $("#scroll-bottom"),
   sendMessage: $("#send-message"),
+  selectionAsk: $("#selection-ask"),
   settingsCancel: $("#settings-cancel"),
   settingsClose: $("#settings-close"),
   settingsDialog: $("#settings-dialog"),
@@ -219,6 +270,10 @@ const elements = {
   toasts: $("#toasts"),
   uploadStatus: $("#upload-status"),
   userMessageNavigationStatus: $("#user-message-navigation-status"),
+  voiceCancel: $("#voice-cancel"),
+  voiceRecorder: $("#voice-recorder"),
+  voiceRecorderTimer: $("#voice-recorder-timer"),
+  voiceSend: $("#voice-send"),
   welcome: $("#welcome"),
   welcomeDescription: $("#welcome-description"),
   welcomeTitle: $("#welcome-title"),
@@ -235,20 +290,29 @@ const defaultSettings = {
   sandbox: "",
 };
 
-const SETTINGS_VERSION = 4;
+const SETTINGS_VERSION = 5;
 
 const state = {
   activeInteractionKey: null,
+  audioUploading: false,
   busy: false,
+  collaborationModes: [],
   completedTurns: new Set(),
   compactPendingThreads: new Set(),
+  composerModes: new Map(),
   connected: false,
   currentThread: null,
   currentThreadId: null,
   currentTurnId: null,
+  dictationBase: "",
+  dictationFinal: "",
+  dictationRecognition: null,
   drafts: new Map(),
   eventSource: null,
   followOutput: true,
+  goals: new Map(),
+  goalLoadingThreads: new Set(),
+  goalSaving: false,
   itemViews: new Map(),
   navigationVersion: 0,
   models: [],
@@ -259,17 +323,22 @@ const state = {
   notifiedTurns: new Set(),
   optimisticUserMessages: new Map(),
   pendingInteractions: new Map(),
+  pendingGoals: new Map(),
+  pendingTurnStarts: 0,
   postponedInteractions: new Set(),
+  promptQueues: new Map(),
   providerStatuses: {
     claude: { message: "Claude Code CLI پیدا نشد", ready: false },
     codex: { message: "در حال راه‌اندازی Codex…", ready: false },
   },
+  queueProcessing: new Set(),
   forceNextScroll: false,
   imageUploadsByDraft: new Map(),
   interactionSubmitting: false,
   scrollFrame: null,
   scrollingToBottom: false,
   settings: loadSettings(),
+  selectedAssistantText: "",
   slashActiveIndex: 0,
   slashCommandExecuting: false,
   slashDismissedValue: null,
@@ -287,6 +356,14 @@ const state = {
   userMessageHighlightTimer: null,
   userMessageNavigationFrame: null,
   userNavigationItemId: null,
+  voiceChunks: [],
+  voiceDiscard: false,
+  voiceElapsedTimer: null,
+  voiceMediaRecorder: null,
+  voiceRequestId: 0,
+  voiceStarting: false,
+  voiceStartedAt: 0,
+  voiceStream: null,
 };
 
 function loadSettings() {
@@ -420,6 +497,9 @@ function parseSlashCommand(text) {
 
 function slashCommandAvailability(command) {
   if (state.navigating) return { available: false, reason: "تا پایان بازشدن گفتگو صبر کنید." };
+  if (["goal", "plan"].includes(command.name) && effectiveProvider() !== "codex") {
+    return { available: false, reason: "این حالت فقط برای گفتگوهای Codex در دسترس است." };
+  }
   if (state.slashCommandExecuting && command.name === "compact") {
     return { available: false, reason: "یک فرمان دیگر در حال اجراست." };
   }
@@ -746,6 +826,14 @@ async function executeSlashCommand(command) {
 
   const targetDraftKey = draftKey();
   switch (command.name) {
+    case "goal":
+      clearSlashCommandText(command.token, targetDraftKey);
+      openGoalDialog();
+      return;
+    case "plan":
+      clearSlashCommandText(command.token, targetDraftKey);
+      togglePlanMode();
+      return;
     case "compact":
       await runCompactSlashCommand(command);
       return;
@@ -830,9 +918,85 @@ function promptSelection() {
 function insertPromptText(text) {
   if (!text) return;
   const { start, end } = promptSelection();
-  elements.prompt.setRangeText(text, start, end, "end");
+  if (typeof elements.prompt.setRangeText === "function") {
+    elements.prompt.setRangeText(text, start, end, "end");
+  } else {
+    elements.prompt.value =
+      elements.prompt.value.slice(0, start) + text + elements.prompt.value.slice(end);
+    const nextPosition = start + text.length;
+    elements.prompt.setSelectionRange(nextPosition, nextPosition);
+  }
   saveCurrentDraft();
   resizePrompt();
+}
+
+function markdownQuote(text) {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+function insertAssistantQuote(text) {
+  const quote = markdownQuote(text || "");
+  if (!quote) return;
+  const { start, end } = promptSelection();
+  const before = elements.prompt.value.slice(0, start);
+  const prefix = before && !before.endsWith("\n\n") ? "\n\n" : "";
+  insertPromptText(`${prefix}${quote}\n\n`);
+  elements.prompt.focus();
+}
+
+function hideSelectionAsk() {
+  state.selectedAssistantText = "";
+  elements.selectionAsk.classList.add("hidden");
+}
+
+function selectedAssistantRange() {
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || selection.rangeCount < 1) return null;
+  const text = selection.toString().trim();
+  if (!text) return null;
+  const range = selection.getRangeAt(0);
+  const startNode = range.startContainer;
+  const startElement =
+    startNode?.nodeType === 1 ? startNode : startNode?.parentElement;
+  const content = startElement?.closest?.(".message-row.assistant .message-content");
+  if (!content || !content.contains(range.endContainer)) return null;
+  return { content, range, selection, text };
+}
+
+function updateSelectionAsk() {
+  const selected = selectedAssistantRange();
+  if (!selected) {
+    hideSelectionAsk();
+    return;
+  }
+  const rect = selected.range.getBoundingClientRect?.();
+  if (!rect) {
+    hideSelectionAsk();
+    return;
+  }
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+  const center = Math.min(viewportWidth - 82, Math.max(82, rect.left + rect.width / 2));
+  const below = rect.bottom + 9;
+  const top = below + 42 < viewportHeight ? below : Math.max(8, rect.top - 47);
+  state.selectedAssistantText = selected.text;
+  elements.selectionAsk.style.left = `${center}px`;
+  elements.selectionAsk.style.top = `${top}px`;
+  elements.selectionAsk.classList.remove("hidden");
+}
+
+let selectionAskFrame = null;
+function scheduleSelectionAskUpdate() {
+  if (selectionAskFrame !== null) return;
+  selectionAskFrame = requestAnimationFrame(() => {
+    selectionAskFrame = null;
+    updateSelectionAsk();
+  });
 }
 
 function appendImagePaths(value, paths) {
@@ -966,9 +1130,288 @@ function imageUploadsForDraft(key = draftKey()) {
   return state.imageUploadsByDraft.get(key) || 0;
 }
 
+function speechRecognitionConstructor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function setDictationActive(active) {
+  elements.dictate.classList.toggle("active", active);
+  elements.dictate.setAttribute("aria-pressed", String(active));
+  elements.dictate.title = active ? "پایان دیکته" : "دیکته (Ctrl+Shift+D)";
+}
+
+function stopDictation() {
+  const recognition = state.dictationRecognition;
+  if (!recognition) return false;
+  try {
+    recognition.stop();
+  } catch {
+    try {
+      recognition.abort();
+    } catch {
+      // Recognition may already have ended.
+    }
+  }
+  return true;
+}
+
+function toggleDictation() {
+  if (state.dictationRecognition) {
+    stopDictation();
+    return;
+  }
+  const SpeechRecognition = speechRecognitionConstructor();
+  if (!SpeechRecognition) {
+    toast("مرورگر شما Dictation را پشتیبانی نمی‌کند؛ Chrome یا Edge جدید را امتحان کنید.", "warning", {
+      duration: 7000,
+    });
+    return;
+  }
+  if (state.voiceMediaRecorder?.state === "recording") {
+    toast("ابتدا ضبط پیام صوتی را تمام کنید.", "warning");
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.lang = "fa-IR";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  state.dictationBase = elements.prompt.value;
+  state.dictationFinal = "";
+  state.dictationRecognition = recognition;
+
+  recognition.onresult = (event) => {
+    let finalText = "";
+    let interimText = "";
+    for (let index = 0; index < event.results.length; index += 1) {
+      const result = event.results[index];
+      const transcript = result?.[0]?.transcript || "";
+      if (result?.isFinal) finalText += transcript;
+      else interimText += transcript;
+    }
+    state.dictationFinal = finalText.trim();
+    const spoken = [state.dictationFinal, interimText.trim()].filter(Boolean).join(" ");
+    const separator = state.dictationBase && spoken && !/\s$/.test(state.dictationBase) ? " " : "";
+    elements.prompt.value = `${state.dictationBase}${separator}${spoken}`;
+    elements.prompt.setSelectionRange(elements.prompt.value.length, elements.prompt.value.length);
+    saveCurrentDraft();
+    resizePrompt();
+  };
+  recognition.onerror = (event) => {
+    if (!["aborted", "no-speech"].includes(event.error)) {
+      const permission = event.error === "not-allowed" || event.error === "service-not-allowed";
+      toast(
+        permission
+          ? "اجازهٔ میکروفون برای Dictation داده نشد."
+          : `Dictation متوقف شد: ${event.error || "خطای ناشناخته"}`,
+        "error",
+      );
+    }
+  };
+  recognition.onend = () => {
+    if (state.dictationRecognition !== recognition) return;
+    state.dictationRecognition = null;
+    setDictationActive(false);
+    saveCurrentDraft();
+    resizePrompt();
+  };
+
+  try {
+    recognition.start();
+    setDictationActive(true);
+  } catch (error) {
+    state.dictationRecognition = null;
+    setDictationActive(false);
+    showError(error, "شروع Dictation");
+  }
+}
+
+function preferredAudioMimeType() {
+  const MediaRecorderApi = window.MediaRecorder;
+  if (!MediaRecorderApi) return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/mp4",
+  ];
+  return candidates.find((type) => MediaRecorderApi.isTypeSupported?.(type)) || "";
+}
+
+function formatVoiceTime(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function stopVoiceTracks() {
+  for (const track of state.voiceStream?.getTracks?.() || []) track.stop();
+  state.voiceStream = null;
+}
+
+async function uploadAudio(blob) {
+  const type = String(blob.type || "").split(";", 1)[0].toLowerCase();
+  if (!Object.hasOwn(AUDIO_EXTENSIONS, type)) {
+    throw new Error("فرمت صدای ضبط‌شده پشتیبانی نمی‌شود.");
+  }
+  if (!blob.size) throw new Error("صدای ضبط‌شده خالی است.");
+  if (blob.size > MAX_AUDIO_UPLOAD_BYTES) {
+    throw new Error("حجم پیام صوتی باید حداکثر ۲۵ مگابایت باشد.");
+  }
+  const name = `voice-${Date.now()}.${AUDIO_EXTENSIONS[type]}`;
+  const response = await fetch("/api/uploads/audio", {
+    method: "POST",
+    headers: {
+      "Content-Type": type,
+      "X-File-Name": encodeURIComponent(name),
+    },
+    body: blob,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (
+    typeof data.path !== "string" ||
+    (!data.path.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(data.path))
+  ) {
+    throw new Error("سرور مسیر معتبری برای صدا برنگرداند.");
+  }
+  return data.path;
+}
+
+async function sendVoiceBlob(blob) {
+  state.audioUploading = true;
+  updateComposerControls();
+  try {
+    const path = await uploadAudio(blob);
+    const sent = await sendPrompt("", {
+      input: [{ type: "localAudio", path }],
+    });
+    if (!sent) throw new Error("پیام صوتی در این لحظه قابل ارسال نیست.");
+  } catch (error) {
+    showError(error, "ارسال پیام صوتی");
+  } finally {
+    state.audioUploading = false;
+    updateComposerControls();
+  }
+}
+
+async function finishVoiceRecording(mimeType) {
+  const send = !state.voiceDiscard;
+  const chunks = state.voiceChunks;
+  state.voiceChunks = [];
+  state.voiceMediaRecorder = null;
+  state.voiceDiscard = false;
+  clearInterval(state.voiceElapsedTimer);
+  state.voiceElapsedTimer = null;
+  stopVoiceTracks();
+  elements.voiceRecorder.classList.add("hidden");
+  elements.voiceRecorderTimer.textContent = "00:00";
+  elements.recordVoice.classList.remove("active");
+  elements.recordVoice.setAttribute("aria-pressed", "false");
+  updateComposerControls();
+  if (!send) return;
+  const blob = new Blob(chunks, { type: mimeType || chunks[0]?.type || "audio/webm" });
+  await sendVoiceBlob(blob);
+}
+
+function stopVoiceRecording(send = true) {
+  const recorder = state.voiceMediaRecorder;
+  if (!recorder) {
+    if (!state.voiceStarting) return false;
+    state.voiceRequestId += 1;
+    state.voiceStarting = false;
+    updateComposerControls();
+    return true;
+  }
+  state.voiceDiscard = !send;
+  if (recorder.state !== "inactive") recorder.stop();
+  return true;
+}
+
+async function startVoiceRecording() {
+  if (effectiveProvider() !== "codex") {
+    toast("ارسال پیام صوتی فعلاً فقط برای Codex در دسترس است.", "warning");
+    return;
+  }
+  if (state.busy) {
+    toast("بعد از پایان پاسخ فعلی، ضبط پیام صوتی را شروع کنید.", "warning");
+    return;
+  }
+  if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
+    toast("مرورگر شما ضبط پیام صوتی را پشتیبانی نمی‌کند.", "warning");
+    return;
+  }
+  if (state.voiceMediaRecorder || state.voiceStarting) return;
+  stopDictation();
+  state.voiceStarting = true;
+  const requestId = ++state.voiceRequestId;
+  updateComposerControls();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (
+      requestId !== state.voiceRequestId ||
+      state.navigating ||
+      effectiveProvider() !== "codex"
+    ) {
+      for (const track of stream.getTracks?.() || []) track.stop();
+      return;
+    }
+    state.voiceStream = stream;
+    const mimeType = preferredAudioMimeType();
+    const recorder = new window.MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    state.voiceMediaRecorder = recorder;
+    state.voiceChunks = [];
+    state.voiceDiscard = false;
+    state.voiceStartedAt = Date.now();
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) state.voiceChunks.push(event.data);
+    };
+    recorder.onerror = (event) => {
+      toast(`ضبط صدا متوقف شد: ${event.error?.message || "خطای ناشناخته"}`, "error");
+      stopVoiceRecording(false);
+    };
+    recorder.onstop = () => void finishVoiceRecording(recorder.mimeType || mimeType);
+    recorder.start(250);
+    elements.voiceRecorder.classList.remove("hidden");
+    elements.recordVoice.classList.add("active");
+    elements.recordVoice.setAttribute("aria-pressed", "true");
+    elements.voiceRecorderTimer.textContent = "00:00";
+    clearInterval(state.voiceElapsedTimer);
+    state.voiceElapsedTimer = setInterval(() => {
+      const elapsed = Date.now() - state.voiceStartedAt;
+      elements.voiceRecorderTimer.textContent = formatVoiceTime(elapsed);
+      if (elapsed >= MAX_VOICE_RECORDING_MS) {
+        toast("سقف ۱۰ دقیقه‌ای ضبط رسید؛ پیام در حال ارسال است.", "warning");
+        stopVoiceRecording(true);
+      }
+    }, 250);
+    updateComposerControls();
+  } catch (error) {
+    if (requestId !== state.voiceRequestId) return;
+    state.voiceMediaRecorder = null;
+    state.voiceChunks = [];
+    stopVoiceTracks();
+    elements.voiceRecorder.classList.add("hidden");
+    elements.recordVoice.classList.remove("active");
+    elements.recordVoice.setAttribute("aria-pressed", "false");
+    const denied = error?.name === "NotAllowedError" || error?.name === "SecurityError";
+    toast(
+      denied ? "اجازهٔ دسترسی به میکروفون داده نشد." : `شروع ضبط ممکن نبود: ${error.message}`,
+      "error",
+      { duration: 7000 },
+    );
+  } finally {
+    if (requestId === state.voiceRequestId) state.voiceStarting = false;
+    updateComposerControls();
+  }
+}
+
 function updateComposerControls() {
   const uploadingImages = imageUploadsForDraft();
-  const uploading = uploadingImages > 0;
+  const uploading = uploadingImages > 0 || state.audioUploading;
+  const recording = state.voiceMediaRecorder?.state === "recording";
   const text = elements.prompt.value.trim();
   const slash = parseSlashCommand(elements.prompt.value);
   const slashCanRun =
@@ -976,16 +1419,37 @@ function updateComposerControls() {
     (slash.command
       ? slashCommandAvailability(slash.command).available
       : !state.navigating && !state.slashCommandExecuting);
+  const queueMode = state.busy && !slash;
   elements.sendMessage.disabled = slash
     ? !slashCanRun
-    : !state.connected || state.busy || state.navigating || uploading || !text;
+    : !state.connected || state.navigating || uploading || recording || !text;
+  elements.sendMessage.classList.toggle("queue-mode", queueMode);
+  elements.sendMessage.setAttribute(
+    "aria-label",
+    queueMode ? "افزودن پیام به صف" : "ارسال پیام",
+  );
+  elements.sendMessage.title = queueMode ? "افزودن به صف" : "ارسال";
+  elements.composerHint.textContent = state.busy
+    ? "Enter برای افزودن به صف · Shift+Enter برای خط جدید"
+    : "Enter برای ارسال · Shift+Enter برای خط جدید";
   elements.addImages.disabled = state.navigating || uploading;
   elements.imageInput.disabled = state.navigating || uploading;
-  elements.uploadStatus.textContent =
-    uploadingImages > 1
+  elements.composerTools.disabled = state.navigating || recording;
+  elements.dictate.disabled = state.navigating || recording;
+  elements.recordVoice.disabled =
+    !state.connected ||
+    state.navigating ||
+    uploading ||
+    state.voiceStarting ||
+    state.busy ||
+    effectiveProvider() !== "codex";
+  elements.uploadStatus.textContent = state.audioUploading
+    ? "در حال ارسال صدا…"
+    : uploadingImages > 1
       ? `در حال افزودن ${uploadingImages.toLocaleString("fa-IR")} تصویر…`
       : "در حال افزودن تصویر…";
   elements.uploadStatus.classList.toggle("hidden", !uploading);
+  updateComposerModeUi();
   updateSlashCommandMenu();
 }
 
@@ -1074,7 +1538,12 @@ function setBusy(busy, turnId = null) {
 
 function setNavigating(navigating) {
   state.navigating = navigating;
-  if (navigating) closeSlashCommandMenu();
+  if (navigating) {
+    closeSlashCommandMenu();
+    closeComposerToolsMenu();
+    stopDictation();
+    stopVoiceRecording(false);
+  }
   elements.prompt.disabled = navigating;
   updateConnection();
   updateComposerControls();
@@ -1547,6 +2016,443 @@ function draftKey(threadId = state.currentThreadId) {
   return threadId || `${NEW_THREAD_DRAFT_PREFIX}:${state.newDraftId}`;
 }
 
+function composerModeFor(key = draftKey()) {
+  return state.composerModes.get(key) || "default";
+}
+
+function goalFor(key = draftKey()) {
+  return state.pendingGoals.get(key) || state.goals.get(key) || null;
+}
+
+function closeComposerToolsMenu() {
+  elements.composerToolsMenu.classList.add("hidden");
+  elements.composerTools.setAttribute("aria-expanded", "false");
+}
+
+function updateComposerModeUi() {
+  const provider = effectiveProvider();
+  const codex = provider === "codex";
+  const plan = codex && composerModeFor() === "plan";
+  const goal = codex ? goalFor() : null;
+  elements.planModeOption.disabled = !codex;
+  elements.goalModeOption.disabled = !codex;
+  elements.planModeOption.setAttribute("aria-checked", String(plan));
+  elements.composerToolsNote.classList.toggle("hidden", codex);
+  elements.composerTools.classList.toggle("active-mode", Boolean(plan || goal));
+  elements.composerToolLabel.textContent = plan ? "Plan" : goal ? "Goal" : "ابزارها";
+  elements.composerTools.title = !codex
+    ? "Plan و Goal فقط برای Codex در دسترس‌اند"
+    : plan
+      ? "Plan mode روشن است"
+      : goal
+        ? "Goal فعال است"
+        : "حالت‌ها و هدف";
+}
+
+function toggleComposerToolsMenu() {
+  const opening = elements.composerToolsMenu.classList.contains("hidden");
+  closeSlashCommandMenu();
+  elements.composerToolsMenu.classList.toggle("hidden", !opening);
+  elements.composerTools.setAttribute("aria-expanded", String(opening));
+}
+
+function togglePlanMode() {
+  if (effectiveProvider() !== "codex") {
+    toast("Plan mode فقط در گفتگوهای Codex در دسترس است.", "warning");
+    return false;
+  }
+  const key = draftKey();
+  const plan = composerModeFor(key) !== "plan";
+  if (plan) state.composerModes.set(key, "plan");
+  else state.composerModes.delete(key);
+  updateComposerModeUi();
+  closeComposerToolsMenu();
+  toast(plan ? "Plan mode روشن شد." : "Plan mode خاموش شد.", "success");
+  return plan;
+}
+
+function effectivePlanModel() {
+  const selected = state.settings.modelByProvider.codex || "";
+  if (selected) return selected;
+  const runtime = state.currentThreadId
+    ? state.threadRuntime.get(state.currentThreadId) || {}
+    : {};
+  if (runtime.model) return runtime.model;
+  if (state.currentThread?.model) return state.currentThread.model;
+  const models = state.modelsByProvider.codex || [];
+  const fallback = models.find((model) => model.isDefault) || models[0];
+  return fallback?.model || fallback?.id || "";
+}
+
+function planCollaborationMode() {
+  const template =
+    state.collaborationModes.find((mode) => mode.mode === "plan") || {};
+  const model = effectivePlanModel() || template.model || "";
+  if (!model) return null;
+  return {
+    mode: "plan",
+    settings: {
+      developer_instructions: null,
+      model,
+      reasoning_effort:
+        template.reasoning_effort || state.settings.effort || "medium",
+    },
+  };
+}
+
+async function loadCollaborationModes() {
+  try {
+    const result = await rpc("collaborationMode/list", {});
+    state.collaborationModes = Array.isArray(result?.data) ? result.data : [];
+  } catch {}
+}
+
+const GOAL_STATUS_LABELS = {
+  active: "فعال",
+  paused: "مکث",
+  blocked: "متوقف",
+  usageLimited: "محدودیت مصرف",
+  budgetLimited: "پایان بودجه",
+  complete: "کامل",
+};
+
+function formatGoalUsage(goal) {
+  const parts = [];
+  if (Number.isFinite(goal?.tokensUsed) && goal.tokensUsed > 0) {
+    const tokens = goal.tokensUsed.toLocaleString("fa-IR");
+    parts.push(
+      Number.isFinite(goal.tokenBudget) && goal.tokenBudget > 0
+        ? `${tokens} از ${goal.tokenBudget.toLocaleString("fa-IR")} توکن`
+        : `${tokens} توکن`,
+    );
+  }
+  if (Number.isFinite(goal?.timeUsedSeconds) && goal.timeUsedSeconds > 0) {
+    const minutes = Math.max(1, Math.round(goal.timeUsedSeconds / 60));
+    parts.push(`${minutes.toLocaleString("fa-IR")} دقیقه`);
+  }
+  return parts.join(" · ");
+}
+
+function renderGoalProgress() {
+  const goal = effectiveProvider() === "codex" ? goalFor() : null;
+  elements.goalProgress.classList.toggle("hidden", !goal);
+  if (!goal) {
+    elements.goalProgress.removeAttribute("data-status");
+    elements.goalObjective.textContent = "";
+    elements.goalUsage.classList.add("hidden");
+    updateComposerModeUi();
+    return;
+  }
+
+  const status = goal.status || "active";
+  elements.goalProgress.dataset.status = status;
+  elements.goalObjective.textContent = goal.objective || "";
+  elements.goalObjective.title = goal.objective || "";
+  elements.goalStatus.textContent = goal.pending
+    ? "با اولین ارسال فعال می‌شود"
+    : GOAL_STATUS_LABELS[status] || status;
+  const usage = formatGoalUsage(goal);
+  elements.goalUsage.textContent = usage;
+  elements.goalUsage.classList.toggle("hidden", !usage);
+
+  const paused = status !== "active";
+  elements.goalToggle.disabled = Boolean(goal.pending || status === "complete" || state.goalSaving);
+  elements.goalEdit.disabled = state.goalSaving;
+  elements.goalClear.disabled = state.goalSaving;
+  elements.goalToggle.setAttribute(
+    "aria-label",
+    paused ? "ادامهٔ هدف" : "مکث هدف",
+  );
+  elements.goalToggle.title = paused ? "ادامهٔ هدف" : "مکث هدف";
+  elements.goalToggle.innerHTML = paused
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5z" /></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10m6-10v10" /></svg>';
+  updateComposerModeUi();
+}
+
+async function loadGoal(threadId) {
+  if (!threadId || providerForThread(threadId) !== "codex") return null;
+  if (state.goalLoadingThreads.has(threadId)) return null;
+  state.goalLoadingThreads.add(threadId);
+  try {
+    const result = await rpc("thread/goal/get", { threadId });
+    if (result?.goal) state.goals.set(threadId, result.goal);
+    else state.goals.delete(threadId);
+    if (state.currentThreadId === threadId) renderGoalProgress();
+    return result?.goal || null;
+  } catch {
+    return null;
+  } finally {
+    state.goalLoadingThreads.delete(threadId);
+  }
+}
+
+function openGoalDialog() {
+  closeComposerToolsMenu();
+  if (effectiveProvider() !== "codex") {
+    toast("Goal mode فقط در گفتگوهای Codex در دسترس است.", "warning");
+    return;
+  }
+  const goal = goalFor();
+  elements.goalInput.value = goal?.objective || "";
+  elements.goalDialogTitle.textContent = goal ? "ویرایش هدف" : "یک هدف تعیین کن";
+  elements.goalSave.textContent = goal ? "ذخیرهٔ هدف" : "شروع Goal";
+  elements.goalDialogHelp.textContent = state.currentThreadId
+    ? "تغییر هدف از همین گفتگو ادامه پیدا می‌کند."
+    : "هدف با اولین ارسال روی گفتگوی تازه فعال می‌شود.";
+  elements.goalDialog.showModal();
+  elements.goalInput.focus();
+}
+
+async function saveGoalFromDialog(event) {
+  event.preventDefault();
+  if (state.goalSaving) return;
+  const objective = elements.goalInput.value.trim();
+  if (!objective) {
+    elements.goalInput.focus();
+    return;
+  }
+  const key = draftKey();
+  if (!state.currentThreadId) {
+    const previous = goalFor(key);
+    const replaceGeneratedPrompt =
+      !elements.prompt.value.trim() ||
+      (previous?.pending && elements.prompt.value.trim() === previous.objective);
+    state.pendingGoals.set(key, {
+      objective,
+      pending: true,
+      status: "active",
+      timeUsedSeconds: 0,
+      tokensUsed: 0,
+    });
+    if (replaceGeneratedPrompt) {
+      elements.prompt.value = objective;
+      saveCurrentDraft();
+      resizePrompt();
+    }
+    elements.goalDialog.close();
+    renderGoalProgress();
+    elements.prompt.focus();
+    return;
+  }
+
+  state.goalSaving = true;
+  elements.goalSave.disabled = true;
+  renderGoalProgress();
+  try {
+    const current = goalFor();
+    const status = ["active", "paused"].includes(current?.status)
+      ? current.status
+      : "active";
+    const result = await rpc("thread/goal/set", {
+      threadId: state.currentThreadId,
+      objective,
+      status,
+    });
+    if (result?.goal) state.goals.set(state.currentThreadId, result.goal);
+    elements.goalDialog.close();
+    toast("هدف گفتگو ذخیره شد.", "success");
+  } catch (error) {
+    showError(error, "ذخیرهٔ هدف");
+  } finally {
+    state.goalSaving = false;
+    elements.goalSave.disabled = false;
+    renderGoalProgress();
+  }
+}
+
+async function toggleGoalStatus() {
+  const threadId = state.currentThreadId;
+  const goal = goalFor();
+  if (!threadId || !goal || goal.pending || state.goalSaving) return;
+  const status = goal.status === "active" ? "paused" : "active";
+  state.goalSaving = true;
+  renderGoalProgress();
+  try {
+    const result = await rpc("thread/goal/set", { threadId, status });
+    if (result?.goal) state.goals.set(threadId, result.goal);
+    toast(status === "paused" ? "Goal موقتاً متوقف شد." : "Goal دوباره فعال شد.", "success");
+  } catch (error) {
+    showError(error, status === "paused" ? "مکث هدف" : "ادامهٔ هدف");
+  } finally {
+    state.goalSaving = false;
+    renderGoalProgress();
+  }
+}
+
+async function clearGoal() {
+  const key = draftKey();
+  if (!state.currentThreadId) {
+    state.pendingGoals.delete(key);
+    renderGoalProgress();
+    return;
+  }
+  if (!goalFor() || state.goalSaving) return;
+  const threadId = state.currentThreadId;
+  state.goalSaving = true;
+  renderGoalProgress();
+  try {
+    await rpc("thread/goal/clear", { threadId });
+    state.goals.delete(threadId);
+    state.pendingGoals.delete(threadId);
+    toast("Goal از گفتگو برداشته شد.", "success");
+  } catch (error) {
+    showError(error, "پاک‌کردن هدف");
+  } finally {
+    state.goalSaving = false;
+    renderGoalProgress();
+  }
+}
+
+function migrateComposerState(sourceKey, targetKey) {
+  if (!sourceKey || sourceKey === targetKey) return;
+  if (state.composerModes.has(sourceKey)) {
+    state.composerModes.set(targetKey, state.composerModes.get(sourceKey));
+    state.composerModes.delete(sourceKey);
+  }
+  if (state.pendingGoals.has(sourceKey)) {
+    state.pendingGoals.set(targetKey, state.pendingGoals.get(sourceKey));
+    state.pendingGoals.delete(sourceKey);
+  }
+}
+
+async function activatePendingGoal(threadId) {
+  const pending = state.pendingGoals.get(threadId);
+  if (!pending) return null;
+  const result = await rpc("thread/goal/set", {
+    threadId,
+    objective: pending.objective,
+    status: "active",
+  });
+  if (result?.goal) state.goals.set(threadId, result.goal);
+  state.pendingGoals.delete(threadId);
+  if (state.currentThreadId === threadId) renderGoalProgress();
+  return result?.goal || null;
+}
+
+function promptQueueFor(key = draftKey(), create = false) {
+  if (!state.promptQueues.has(key) && create) state.promptQueues.set(key, []);
+  return state.promptQueues.get(key) || [];
+}
+
+function renderPromptQueue() {
+  const queue = promptQueueFor();
+  elements.promptQueue.classList.toggle("hidden", queue.length === 0);
+  elements.promptQueueCount.textContent = queue.length.toLocaleString("fa-IR");
+  elements.promptQueueItems.replaceChildren();
+
+  queue.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "prompt-queue-item";
+    row.dataset.queueId = item.id;
+
+    const order = document.createElement("span");
+    order.className = "prompt-queue-index";
+    order.textContent = String(index + 1).padStart(2, "0");
+
+    const preview = document.createElement("bdi");
+    preview.className = "prompt-queue-preview";
+    preview.textContent = item.text.replace(/\s+/g, " ").trim();
+    preview.title = item.text;
+
+    const actions = document.createElement("span");
+    actions.className = "prompt-queue-actions";
+    actions.innerHTML = `
+      <button class="prompt-queue-action" type="button" data-queue-action="edit" aria-label="ویرایش پیام صف" title="ویرایش">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.7 5.3 4 4M4.75 19.25l3.6-.8L19.2 7.6a1.4 1.4 0 0 0 0-2l-.8-.8a1.4 1.4 0 0 0-2 0L5.55 15.65z" /></svg>
+      </button>
+      <button class="prompt-queue-action" type="button" data-queue-action="remove" aria-label="حذف پیام از صف" title="حذف">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4.75h6V7M8 10v7M12 10v7M16 10v7M6.5 7l.7 12.25h9.6L17.5 7" /></svg>
+      </button>`;
+    row.append(order, preview, actions);
+    elements.promptQueueItems.append(row);
+  });
+}
+
+function migratePromptQueue(sourceKey, targetKey) {
+  if (!sourceKey || sourceKey === targetKey) return;
+  const source = promptQueueFor(sourceKey);
+  if (!source.length) return;
+  const target = promptQueueFor(targetKey);
+  state.promptQueues.set(targetKey, [...source, ...target]);
+  state.promptQueues.delete(sourceKey);
+  if (draftKey() === targetKey) renderPromptQueue();
+}
+
+function enqueuePrompt(text, key = draftKey()) {
+  const queue = promptQueueFor(key, true);
+  const item = { id: crypto.randomUUID(), text };
+  queue.push(item);
+  if (key === draftKey()) {
+    elements.prompt.value = "";
+    state.drafts.set(key, "");
+    closeSlashCommandMenu();
+    resizePrompt();
+    renderPromptQueue();
+  }
+  return item;
+}
+
+function removeQueuedPrompt(queueId, { edit = false } = {}) {
+  const key = draftKey();
+  const queue = promptQueueFor(key);
+  const index = queue.findIndex((item) => item.id === queueId);
+  if (index < 0) return;
+  const [item] = queue.splice(index, 1);
+  if (!queue.length) state.promptQueues.delete(key);
+  renderPromptQueue();
+  if (!edit) return;
+
+  const existing = elements.prompt.value.trim();
+  elements.prompt.value = existing ? `${item.text}\n\n${elements.prompt.value}` : item.text;
+  elements.prompt.setSelectionRange(elements.prompt.value.length, elements.prompt.value.length);
+  saveCurrentDraft();
+  resizePrompt();
+  elements.prompt.focus();
+}
+
+function clearPromptQueue() {
+  state.promptQueues.delete(draftKey());
+  renderPromptQueue();
+}
+
+function scheduleNextQueuedPrompt(threadId = state.currentThreadId) {
+  if (!threadId) return;
+  setTimeout(() => void processNextQueuedPrompt(threadId), 0);
+}
+
+async function processNextQueuedPrompt(threadId) {
+  if (
+    !threadId ||
+    threadId !== state.currentThreadId ||
+    state.busy ||
+    state.navigating ||
+    !state.connected ||
+    state.pendingTurnStarts > 0 ||
+    imageUploadsForDraft(threadId) > 0
+  ) {
+    return false;
+  }
+  const key = draftKey(threadId);
+  if (state.queueProcessing.has(key)) return false;
+  const queue = promptQueueFor(key);
+  const item = queue.shift();
+  if (!item) return false;
+  if (!queue.length) state.promptQueues.delete(key);
+  state.queueProcessing.add(key);
+  renderPromptQueue();
+  try {
+    const started = await sendPrompt(item.text, { fromQueue: true });
+    if (!started) {
+      promptQueueFor(key, true).unshift(item);
+      renderPromptQueue();
+    }
+    return started;
+  } finally {
+    state.queueProcessing.delete(key);
+  }
+}
+
 function saveCurrentDraft() {
   state.drafts.set(draftKey(), elements.prompt.value);
 }
@@ -1554,6 +2460,8 @@ function saveCurrentDraft() {
 function restoreDraft(threadId = state.currentThreadId) {
   elements.prompt.value = state.drafts.get(draftKey(threadId)) || "";
   state.slashDismissedValue = null;
+  renderPromptQueue();
+  renderGoalProgress();
   resizePrompt();
 }
 
@@ -1692,6 +2600,8 @@ function newChat({ draftId = null, historyMode = "push" } = {}) {
     return false;
   }
   saveCurrentDraft();
+  stopDictation();
+  stopVoiceRecording(false);
   state.navigationVersion += 1;
   closeInteractionDialogs();
   state.openingThreadId = null;
@@ -1745,6 +2655,7 @@ function setCurrentThread(thread, metadata = {}) {
   renderThreadList();
   activateThreadInteractions(thread.id);
   updateConnection();
+  void loadGoal(thread.id);
 }
 
 function itemText(item) {
@@ -1753,7 +2664,7 @@ function itemText(item) {
       .map((part) => {
         if (part.type === "text") return part.text;
         if (part.type === "image" || part.type === "localImage") return `[تصویر: ${part.path || part.url}]`;
-        if (part.type === "audio" || part.type === "localAudio") return `[صدا: ${part.path || part.url}]`;
+        if (part.type === "audio" || part.type === "localAudio") return "🎙️ پیام صوتی";
         if (part.type === "skill") return `$${part.name}`;
         if (part.type === "mention") return `@${part.name}`;
         return "";
@@ -1765,18 +2676,27 @@ function itemText(item) {
   return "";
 }
 
+function createAssistantMessageActions() {
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  actions.setAttribute("aria-label", "کارهای پاسخ");
+  actions.innerHTML = `
+    <button class="message-action" type="button" data-message-action="copy" title="کپی پاسخ" aria-label="کپی پاسخ">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+      <span>کپی</span>
+    </button>
+    <button class="message-action" type="button" data-message-action="quote" title="ارجاع به این پاسخ" aria-label="ارجاع به این پاسخ در پیام تازه">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.25 10.75H4.5A5.5 5.5 0 0 1 10 5.25v3A2.5 2.5 0 0 1 7.5 10.75v3H4.75M16.25 10.75H13.5A5.5 5.5 0 0 1 19 5.25v3a2.5 2.5 0 0 1-2.5 2.5v3h-2.75" /></svg>
+      <span>ارجاع</span>
+    </button>`;
+  return actions;
+}
+
 function createMessageView(item) {
   const role = item.type === "userMessage" ? "user" : "assistant";
   const row = document.createElement("article");
   row.className = `message-row ${role}`;
   row.dataset.itemId = item.id;
-
-  if (role === "assistant") {
-    const avatar = document.createElement("div");
-    avatar.className = "message-avatar";
-    avatar.textContent = "C";
-    row.append(avatar);
-  }
 
   const body = document.createElement("div");
   body.className = "message-body";
@@ -1784,6 +2704,7 @@ function createMessageView(item) {
   content.className = "message-content";
   content.dir = "auto";
   body.append(content);
+  if (role === "assistant") body.append(createAssistantMessageActions());
   row.append(body);
   elements.messages.append(row);
   if (role === "user") scheduleUserMessageNavigationUpdate();
@@ -1792,30 +2713,31 @@ function createMessageView(item) {
 
 function activityTitle(item) {
   const titles = {
-    collabAgentToolCall: "فعالیت agent فرعی",
-    commandExecution: "اجرای فرمان",
-    contextCompaction: "فشرده‌سازی context",
-    dynamicToolCall: `ابزار: ${item.tool || ""}`,
-    enteredReviewMode: "ورود به حالت review",
-    exitedReviewMode: "پایان حالت review",
-    fileChange: "تغییر فایل‌ها",
-    hookPrompt: "اجرای hook",
+    collabAgentToolCall: "عامل‌های همکار",
+    commandExecution: "ترمینال",
+    contextCompaction: "بهینه‌سازی گفتگو",
+    dynamicToolCall: item.tool ? `ابزار · ${item.tool}` : "ابزار",
+    enteredReviewMode: "حالت بررسی",
+    exitedReviewMode: "پایان بررسی",
+    fileChange: "ویرایش فایل‌ها",
+    hookPrompt: "Hook",
     imageGeneration: "ساخت تصویر",
     imageView: "مشاهده تصویر",
-    mcpToolCall: `MCP: ${item.server || ""} / ${item.tool || ""}`,
-    plan: "برنامه کار",
-    reasoning: "روند بررسی",
+    mcpToolCall: item.tool ? `ابزار · ${item.tool}` : "ابزار MCP",
+    plan: "برنامه",
+    reasoning: "تفکر",
     sleep: "انتظار",
-    subAgentActivity: "فعالیت agent فرعی",
-    webSearch: `جستجوی وب: ${item.query || ""}`,
+    subAgentActivity: "عامل‌های همکار",
+    webSearch: item.query ? `جستجوی وب · ${item.query}` : "جستجوی وب",
   };
   return titles[item.type] || item.type || "فعالیت";
 }
 
 function createActivityView(item) {
   const details = document.createElement("details");
-  details.className = "activity-card";
+  details.className = `activity-card activity-${item.type.replace(/[^a-z0-9_-]/gi, "-")}`;
   details.dataset.itemId = item.id;
+  details.dataset.activityType = item.type;
   const summary = document.createElement("summary");
   summary.textContent = activityTitle(item);
   summary.addEventListener("click", (event) => {
@@ -1892,6 +2814,8 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
 
   const running = phase !== "completed";
   const hasText = Boolean(view.text.trim());
+  const wasRunning = view.element.classList.contains("running");
+  view.element.hidden = false;
   view.element.classList.add("reasoning-card");
   view.element.classList.toggle("running", running);
   view.element.setAttribute("aria-busy", String(running));
@@ -1903,11 +2827,11 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
       "reasoning-stopped",
     );
     view.summary.removeAttribute("aria-disabled");
-    view.summary.textContent = "روند بررسی";
+    view.summary.textContent = running ? "در حال فکر کردن" : "تفکر";
     view.content.hidden = false;
     view.content.className = "activity-content";
     view.content.textContent = view.text;
-    if (running) view.element.open = true;
+    if (!running && wasRunning) view.element.open = false;
     return;
   }
 
@@ -1916,12 +2840,13 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
   view.element.classList.toggle("reasoning-complete", !running && !stopped);
   view.element.classList.toggle("reasoning-stopped", stopped);
   view.element.open = false;
+  view.element.hidden = !running && !stopped;
   view.summary.setAttribute("aria-disabled", "true");
   view.content.hidden = true;
   view.content.replaceChildren();
   setReasoningStatusLabel(
     view,
-    running ? "در حال بررسی" : stopped ? "بررسی متوقف شد" : "بررسی انجام شد",
+    running ? "در حال فکر کردن" : stopped ? "تفکر متوقف شد" : "تفکر انجام شد",
     running,
   );
 }
@@ -1932,6 +2857,7 @@ function updateCompaction(view, phase) {
   view.element.classList.toggle("running", running);
   view.element.classList.toggle("completed", !running);
   view.element.open = false;
+  view.element.hidden = !running;
   view.element.setAttribute("aria-busy", String(running));
   view.summary.setAttribute("aria-disabled", "true");
   view.summary.textContent = running
@@ -1951,9 +2877,16 @@ function updateActivity(view, item, phase) {
     return;
   }
 
+  const wasRunning = view.element.classList.contains("running");
   const running = phase !== "completed" && ["inProgress", "running"].includes(item.status);
+  const failed =
+    ["failed", "error"].includes(item.status) ||
+    (item.type === "commandExecution" && item.exitCode != null && item.exitCode !== 0);
+  view.element.hidden = false;
   view.element.classList.toggle("running", running);
-  if (running) view.element.open = true;
+  view.element.classList.toggle("completed", !running);
+  view.element.classList.toggle("failed", failed);
+  if (!running && wasRunning) view.element.open = false;
 
   if (item.type === "commandExecution") {
     view.content.className = "activity-sections";
@@ -2142,6 +3075,7 @@ function renderHistory(thread) {
   renderThreadList();
   updateAttentionUi();
   scheduleScrollToBottom(true);
+  if (!state.busy) scheduleNextQueuedPrompt(thread.id);
 }
 
 async function openThread(threadId, { historyMode = "push" } = {}) {
@@ -2160,6 +3094,7 @@ async function openThread(threadId, { historyMode = "push" } = {}) {
     renderThreadList();
     activateThreadInteractions(threadId);
     updateConnection();
+    if (!state.busy) scheduleNextQueuedPrompt(threadId);
     closeSidebar();
     return true;
   }
@@ -2445,7 +3380,7 @@ function renderPlan(params) {
   let view = state.itemViews.get(id);
   if (!view) {
     view = createActivityView({ id, type: "plan" });
-    view.element.open = true;
+    view.element.open = false;
     state.itemViews.set(id, view);
   }
   view.content.className = "plan-list";
@@ -2473,6 +3408,9 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
     provider: state.settings.provider,
   };
   if (state.settings.provider === "codex") {
+    if (composerModeFor(sourceDraftKey) !== "plan") {
+      params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
+    }
     if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
     if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
     if (state.settings.personality) params.personality = state.settings.personality;
@@ -2487,6 +3425,8 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
   if (!state.threads.some((thread) => thread.id === result.thread.id)) {
     state.threads.unshift(result.thread);
   }
+  migratePromptQueue(sourceDraftKey, result.thread.id);
+  migrateComposerState(sourceDraftKey, result.thread.id);
   if (state.drafts.has(sourceDraftKey)) {
     state.drafts.set(result.thread.id, state.drafts.get(sourceDraftKey));
     state.drafts.delete(sourceDraftKey);
@@ -2509,30 +3449,39 @@ function turnEventKey(threadId, turnId) {
   return `${threadId}:${turnId}`;
 }
 
-async function sendPrompt(text = elements.prompt.value) {
-  if (parseSlashCommand(text)) {
-    await handleSlashCommand(text);
-    return;
+async function sendPrompt(
+  text = elements.prompt.value,
+  { fromQueue = false, input: providedInput = null } = {},
+) {
+  const structuredInput =
+    Array.isArray(providedInput) && providedInput.length ? providedInput : null;
+  if (!structuredInput && parseSlashCommand(text)) {
+    return Boolean(await handleSlashCommand(text));
   }
-  text = text.trim();
-  if (
-    !text ||
-    !state.connected ||
-    state.busy ||
-    state.navigating ||
-    imageUploadsForDraft() > 0
-  ) {
-    return;
+  text = String(text || "").trim();
+  const input = structuredInput || (text ? [{ type: "text", text }] : []);
+  if (!input.length || !state.connected || state.navigating || imageUploadsForDraft() > 0) {
+    return false;
+  }
+  if (state.busy) {
+    if (structuredInput) {
+      toast("پیام صوتی را بعد از پایان پاسخ فعلی بفرستید.", "warning");
+      return false;
+    }
+    if (fromQueue) return false;
+    enqueuePrompt(text);
+    return true;
   }
   const sourceThreadId = state.currentThreadId;
   const sourceDraftKey = draftKey(sourceThreadId);
   const navigationVersion = state.navigationVersion;
   let targetThreadId = sourceThreadId;
   const clientUserMessageId = crypto.randomUUID();
-  const input = [{ type: "text", text }];
-  elements.prompt.value = "";
-  state.drafts.set(sourceDraftKey, "");
-  resizePrompt();
+  if (!fromQueue && !structuredInput) {
+    elements.prompt.value = "";
+    state.drafts.set(sourceDraftKey, "");
+    resizePrompt();
+  }
   renderOptimisticUserMessage(clientUserMessageId, input);
   scrollToBottom(true, true);
   setBusy(true);
@@ -2544,6 +3493,8 @@ async function sendPrompt(text = elements.prompt.value) {
       unread: false,
     });
   }
+  state.pendingTurnStarts += 1;
+  let turnAccepted = false;
   try {
     const threadId = await ensureThread(
       sourceThreadId,
@@ -2551,6 +3502,7 @@ async function sendPrompt(text = elements.prompt.value) {
       sourceDraftKey,
     );
     targetThreadId = threadId;
+    await activatePendingGoal(threadId);
     const provider =
       state.currentThreadId === threadId && state.currentThread?.provider
         ? state.currentThread.provider
@@ -2561,13 +3513,25 @@ async function sendPrompt(text = elements.prompt.value) {
       threadId,
       provider,
     };
+    if (provider === "codex" && composerModeFor(threadId) === "plan") {
+      const collaborationMode = planCollaborationMode();
+      if (!collaborationMode) {
+        throw new Error("برای Plan mode ابتدا یک مدل Codex انتخاب یا بارگذاری کنید.");
+      }
+      params.collaborationMode = collaborationMode;
+    }
+    if (provider === "codex" && !params.collaborationMode) {
+      params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
+    }
     if (
       state.settings.effort &&
+      !params.collaborationMode &&
       (provider === "codex" || CLAUDE_EFFORTS.has(state.settings.effort))
     ) {
       params.effort = state.settings.effort;
     }
     const result = await rpc("turn/start", params);
+    turnAccepted = true;
     settleOptimisticUserMessage(clientUserMessageId);
     const completedBeforeResponse = state.completedTurns.has(
       turnEventKey(threadId, result.turn.id),
@@ -2588,11 +3552,14 @@ async function sendPrompt(text = elements.prompt.value) {
     }
   } catch (error) {
     const shouldRollback = rollbackOptimisticUserMessage(clientUserMessageId);
+    turnAccepted = !shouldRollback;
     if (shouldRollback) {
       const restoreThreadId = targetThreadId || sourceThreadId;
       const restoreKey = restoreThreadId ? draftKey(restoreThreadId) : sourceDraftKey;
-      const newerDraft = state.drafts.get(restoreKey) || "";
-      state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
+      if (!fromQueue && !structuredInput) {
+        const newerDraft = state.drafts.get(restoreKey) || "";
+        state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
+      }
       if (restoreThreadId) {
         const activity = ensureThreadActivity(restoreThreadId);
         if (activity.phase === "running" && !activity.turnId) {
@@ -2608,11 +3575,17 @@ async function sendPrompt(text = elements.prompt.value) {
         (!restoreThreadId && draftKey() === sourceDraftKey)
       ) {
         setBusy(false);
-        restoreDraft(restoreThreadId);
+        if (!fromQueue && !structuredInput) restoreDraft(restoreThreadId);
       }
     }
     showError(error, "ارسال پیام");
+  } finally {
+    state.pendingTurnStarts = Math.max(0, state.pendingTurnStarts - 1);
+    if (turnAccepted && state.currentThreadId && !state.busy) {
+      scheduleNextQueuedPrompt(state.currentThreadId);
+    }
   }
+  return turnAccepted;
 }
 
 async function stopTurn() {
@@ -2754,6 +3727,20 @@ function handleNotification(message) {
     return;
   }
 
+  if (method === "thread/goal/updated" && threadId) {
+    if (params.goal) state.goals.set(threadId, params.goal);
+    state.pendingGoals.delete(threadId);
+    if (threadId === state.currentThreadId) renderGoalProgress();
+    return;
+  }
+
+  if (method === "thread/goal/cleared" && threadId) {
+    state.goals.delete(threadId);
+    state.pendingGoals.delete(threadId);
+    if (threadId === state.currentThreadId) renderGoalProgress();
+    return;
+  }
+
   if (
     threadId &&
     (method === "item/started" || method === "item/completed") &&
@@ -2852,7 +3839,10 @@ function handleNotification(message) {
       }
     }
 
-    if (!isBackground && isTrackedTurn) finishVisibleTurn(turn);
+    if (!isBackground && isTrackedTurn) {
+      finishVisibleTurn(turn);
+      scheduleNextQueuedPrompt(threadId);
+    }
     renderThreadList();
     updateAttentionUi();
     refreshThreads();
@@ -3610,6 +4600,19 @@ elements.prompt.addEventListener("keyup", (event) => {
 });
 elements.prompt.addEventListener("paste", handlePromptPaste);
 elements.addImages.addEventListener("click", () => elements.imageInput.click());
+elements.composerTools.addEventListener("click", toggleComposerToolsMenu);
+elements.planModeOption.addEventListener("click", togglePlanMode);
+elements.goalModeOption.addEventListener("click", openGoalDialog);
+elements.goalEdit.addEventListener("click", openGoalDialog);
+elements.goalToggle.addEventListener("click", () => void toggleGoalStatus());
+elements.goalClear.addEventListener("click", () => void clearGoal());
+elements.goalForm.addEventListener("submit", (event) => void saveGoalFromDialog(event));
+elements.goalDialogCancel.addEventListener("click", () => elements.goalDialog.close());
+elements.goalDialogClose.addEventListener("click", () => elements.goalDialog.close());
+elements.dictate.addEventListener("click", toggleDictation);
+elements.recordVoice.addEventListener("click", () => void startVoiceRecording());
+elements.voiceCancel.addEventListener("click", () => stopVoiceRecording(false));
+elements.voiceSend.addEventListener("click", () => stopVoiceRecording(true));
 elements.imageInput.addEventListener("change", () => {
   const files = [...elements.imageInput.files];
   const targetDraftKey = draftKey();
@@ -3619,6 +4622,7 @@ elements.imageInput.addEventListener("change", () => {
 elements.conversation.addEventListener(
   "scroll",
   () => {
+    hideSelectionAsk();
     updateScrollState();
     scheduleUserMessageNavigationUpdate();
   },
@@ -3641,6 +4645,12 @@ elements.nextUserMessage.addEventListener("click", () => navigateToUserMessage("
 elements.prompt.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   const slashMenuOpen = !elements.slashCommandMenu.classList.contains("hidden");
+  const toolsMenuOpen = !elements.composerToolsMenu.classList.contains("hidden");
+  if (toolsMenuOpen && event.key === "Escape") {
+    event.preventDefault();
+    closeComposerToolsMenu();
+    return;
+  }
   if (slashMenuOpen && event.key === "Escape") {
     event.preventDefault();
     closeSlashCommandMenu(true);
@@ -3651,9 +4661,19 @@ elements.prompt.addEventListener("keydown", (event) => {
     moveSlashCommandSelection(event.key === "ArrowDown" ? 1 : -1);
     return;
   }
-  if (slashMenuOpen && event.key === "Tab" && state.slashFilteredCommands.length) {
+  if (
+    slashMenuOpen &&
+    event.key === "Tab" &&
+    !event.shiftKey &&
+    state.slashFilteredCommands.length
+  ) {
     event.preventDefault();
     replacePromptWithSlashCommand(state.slashFilteredCommands[state.slashActiveIndex]);
+    return;
+  }
+  if (event.key === "Tab" && event.shiftKey && !slashMenuOpen) {
+    event.preventDefault();
+    togglePlanMode();
     return;
   }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -3688,6 +4708,15 @@ elements.sendMessage.addEventListener("click", () => {
     void sendPrompt();
   }
 });
+elements.promptQueueItems.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-queue-action]");
+  const row = action?.closest("[data-queue-id]");
+  if (!action || !row) return;
+  removeQueuedPrompt(row.dataset.queueId, {
+    edit: action.dataset.queueAction === "edit",
+  });
+});
+elements.promptQueueClear.addEventListener("click", clearPromptQueue);
 elements.stopTurn.addEventListener("click", stopTurn);
 elements.newChat.addEventListener("click", () => newChat());
 elements.threadList.addEventListener("click", (event) => {
@@ -3752,14 +4781,39 @@ document.addEventListener("pointerdown", primeCompletionAudio, {
 });
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest(".composer")) closeSlashCommandMenu(true);
+  if (!event.target.closest("#composer-tools, #composer-tools-menu")) {
+    closeComposerToolsMenu();
+  }
+});
+document.addEventListener("selectionchange", scheduleSelectionAskUpdate);
+elements.messages.addEventListener("pointerup", scheduleSelectionAskUpdate);
+elements.selectionAsk.addEventListener("pointerdown", (event) => event.preventDefault());
+elements.selectionAsk.addEventListener("click", () => {
+  const text = state.selectedAssistantText;
+  if (!text) return;
+  insertAssistantQuote(text);
+  window.getSelection?.()?.removeAllRanges?.();
+  hideSelectionAsk();
 });
 document.addEventListener("keydown", primeCompletionAudio, {
   capture: true,
   once: true,
 });
-window.addEventListener("resize", scheduleUserMessageNavigationUpdate, {
-  passive: true,
+document.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "d") {
+    event.preventDefault();
+    toggleDictation();
+  }
 });
+window.addEventListener(
+  "resize",
+  () => {
+    hideSelectionAsk();
+    scheduleUserMessageNavigationUpdate();
+  },
+  { passive: true },
+);
 window.addEventListener("popstate", (event) => {
   void hydrateThreadFromUrl({
     draftId:
@@ -3776,6 +4830,31 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 elements.messages.addEventListener("click", async (event) => {
+  const messageAction = event.target.closest("[data-message-action]");
+  if (messageAction) {
+    const row = messageAction.closest(".message-row.assistant");
+    const view = row ? state.itemViews.get(row.dataset.itemId) : null;
+    const text = view?.text || row?.querySelector(".message-content")?.textContent || "";
+    if (!text) return;
+    if (messageAction.dataset.messageAction === "quote") {
+      insertAssistantQuote(text);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      const label = messageAction.querySelector("span");
+      messageAction.classList.add("success");
+      if (label) label.textContent = "کپی شد";
+      setTimeout(() => {
+        messageAction.classList.remove("success");
+        if (label) label.textContent = "کپی";
+      }, 1200);
+    } catch {
+      toast("کپی‌کردن ممکن نبود.", "error");
+    }
+    return;
+  }
+
   const button = event.target.closest(".copy-code");
   if (!button) return;
   const code = button.parentElement.querySelector("code")?.textContent || "";
@@ -3809,7 +4888,12 @@ async function initialize() {
       updateSettingsUi();
     }
     applyProviderStatusPayload(status);
-    await Promise.allSettled([loadModels(), refreshThreads(), hydrateThreadFromUrl()]);
+    await Promise.allSettled([
+      loadModels(),
+      loadCollaborationModes(),
+      refreshThreads(),
+      hydrateThreadFromUrl(),
+    ]);
   } catch (error) {
     markProviderConnectionsUnavailable("سرور در دسترس نیست");
     showError(error, "اتصال به سرور");

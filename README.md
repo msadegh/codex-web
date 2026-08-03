@@ -28,8 +28,16 @@ many terminals.
   conversation. Claude runs non-interactively and follows its configured
   permission mode and permission rules.
 - Streams answers, tool activity, plans, file changes, and command output.
+- Supports native Codex Plan mode and persistent Goal mode, including goal
+  pause, resume, edit, clear, and progress state.
+- Offers browser dictation plus recorded voice messages sent to Codex as
+  structured local-audio input.
+- Guides regular Codex turns toward scan-friendly answers while preserving the
+  existing Codex Web visual theme.
 - Uploads multiple images or accepts pasted screenshots and inserts their
   server-side paths into the prompt.
+- Queues follow-up prompts while a turn is running and can quote a selected
+  part of an assistant response back into the composer.
 - Jumps between your own messages, keeps long streams readable, and offers a
   one-click jump to the bottom.
 - Plays one completion sound for foreground and background conversations.
@@ -240,6 +248,8 @@ the list or select a command with the keyboard, mouse, or touch.
 
 | Command | Action |
 | --- | --- |
+| `/goal` | Create or edit a persistent goal for the current Codex conversation |
+| `/plan` | Toggle native Plan mode for subsequent Codex turns; `Shift+Tab` does the same in the composer |
 | `/compact` | Natively compact the current Codex context; available only for an existing, idle conversation |
 | `/new` | Start a new conversation |
 | `/clear` | Clear the current view and start a fresh conversation |
@@ -276,7 +286,7 @@ conflict even though their conversation state is isolated.
 Multiple browser tabs may connect to the same server. Completion audio is
 deduplicated across tabs.
 
-## Images, navigation, and completion alerts
+## Images, voice, navigation, and completion alerts
 
 Use the image button to select up to 20 images, or paste a screenshot directly
 into the composer. PNG, JPEG, WebP, GIF, AVIF, and BMP images up to 25 MiB each
@@ -289,8 +299,17 @@ prompt. During remote use, images selected on your laptop or phone are uploaded
 through the SSH tunnel to the server.
 
 Uploads remain in the cache so old conversation paths continue to work. Review
-and remove unused sensitive images manually. There is no automatic cleanup or
-total cache quota, so long-running installations should monitor disk usage.
+and remove unused sensitive images and voice recordings manually. There is no
+automatic cleanup or total cache quota, so long-running installations should
+monitor disk usage.
+
+The microphone button uses the browser's speech-recognition support to place a
+dictated transcript in the composer for review before sending. Availability and
+whether speech is processed locally or by a browser service depend on the
+browser. The waveform button records a voice message for up to 10 minutes and
+25 MiB, uploads it to the same private server cache, and sends it to Codex as a
+structured `localAudio` input. Both features require microphone permission;
+recorded voice messages are currently Codex-only.
 
 The up/down buttons in the conversation header jump between your messages.
 Completion audio requires one click or key press on the page before browsers

@@ -54,6 +54,37 @@ test("keeps English tables left-to-right", () => {
   assert.equal(root.querySelector("table").getAttribute("dir"), "ltr");
 });
 
+test("uses Persian block direction when mixed text starts with an English term", () => {
+  const root = render(`GitHub در Chrome لاگین نیست. لطفاً روی Sign in بزن.
+
+# Pull Request آماده است
+
+- GitHub را باز کن
+
+> Chrome هنوز لاگین نیست
+
+| GitHub | وضعیت مخزن |
+| --- | --- |
+| fork | آماده است |`);
+
+  assert.equal(root.querySelector("p").getAttribute("dir"), "rtl");
+  assert.equal(root.querySelector("h1").getAttribute("dir"), "rtl");
+  assert.equal(root.querySelector("li").getAttribute("dir"), "rtl");
+  assert.equal(root.querySelector("blockquote").getAttribute("dir"), "rtl");
+  assert.equal(root.querySelector("table").getAttribute("dir"), "rtl");
+  assert.equal(root.querySelector("th").getAttribute("dir"), "ltr");
+  assert.equal(root.querySelector("th:nth-child(2)").getAttribute("dir"), "rtl");
+});
+
+test("keeps purely English message blocks left-to-right", () => {
+  const root = render(`GitHub is open in Chrome.
+
+- Sign in to continue`);
+
+  assert.equal(root.querySelector("p").getAttribute("dir"), "ltr");
+  assert.equal(root.querySelector("li").getAttribute("dir"), "ltr");
+});
+
 test("escapes table HTML and rejects unsafe links", () => {
   const root = render(`| ورودی | پیوند |
 | --- | --- |

@@ -9,6 +9,7 @@ import { parseHTML } from "linkedom";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const APP = join(ROOT, "public", "app.js");
 const INDEX = join(ROOT, "public", "index.html");
+const ICON = join(ROOT, "public", "icon.svg");
 const STYLES = join(ROOT, "public", "styles.css");
 
 class FakeEventSource {
@@ -460,6 +461,7 @@ test(
       name: "New thread",
       turns: [],
     };
+    const threadStarts = [];
     const fetchHandler = async (path, options = {}) => {
       if (path === "/api/status") {
         return jsonResponse({
@@ -472,7 +474,7 @@ test(
         });
       }
       if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
-      const { method } = JSON.parse(options.body);
+      const { method, params } = JSON.parse(options.body);
       if (method === "model/list") return jsonResponse({ result: { data: [] } });
       if (method === "thread/list") {
         return jsonResponse({ result: { data: [oldSummary], nextCursor: null } });
@@ -483,6 +485,7 @@ test(
         });
       }
       if (method === "thread/start") {
+        threadStarts.push(params);
         return jsonResponse({ result: { thread: newThread, cwd: "/workspace" } });
       }
       if (method === "turn/start") {
@@ -548,6 +551,10 @@ test(
     assert.equal(finalUrl.searchParams.get("thread"), null);
     assert.equal(finalUrl.searchParams.get("layout"), "wide");
     assert.equal(finalUrl.hash, "#composer");
+    assert.match(
+      threadStarts[0].developerInstructions,
+      /short descriptive headings, bullet lists, or numbered steps/,
+    );
   },
 );
 
@@ -670,6 +677,68 @@ test("plan step text can shrink and wrap unbroken paths on narrow viewports", as
   assert.match(rule, /min-width:\s*0/);
   assert.match(rule, /flex:\s*1 1 auto/);
   assert.match(rule, /overflow-wrap:\s*anywhere/);
+});
+
+test("feature UI preserves the original Codex Web theme and conversation dimensions", async () => {
+  const [app, index, styles] = await Promise.all([
+    readFile(APP, "utf8"),
+    readFile(INDEX, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+  const root = styles.match(/:root\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const page = styles.match(/html,\s*body\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const messages = styles.match(/\.messages\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+
+  assert.match(root, /--bg:\s*#0d0f0d/);
+  assert.match(root, /--panel:\s*#121512/);
+  assert.match(root, /--text:\s*#f1f4ed/);
+  assert.match(root, /--accent:\s*#d8ff6b/);
+  assert.match(page, /font-size:\s*15px/);
+  assert.match(page, /line-height:\s*1\.65/);
+  assert.match(messages, /width:\s*min\(860px,/);
+  assert.match(composer, /width:\s*min\(850px,/);
+  assert.doesNotMatch(styles, /data-palette|--neon-gradient|--violet/);
+  assert.doesNotMatch(index, /accent-palette|palette-field/);
+  assert.doesNotMatch(app, /applyPalette|ACCENT_PALETTES/);
+});
+
+test("favicon and in-app marks use the new terminal logo in the original theme", async () => {
+  const [index, icon, styles] = await Promise.all([
+    readFile(INDEX, "utf8"),
+    readFile(ICON, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+
+  assert.match(index, /rel="icon" href="\/icon\.svg\?v=2"[^>]+sizes="any"/);
+  assert.equal((index.match(/class="brand-logo"/g) || []).length, 2);
+  assert.match(icon, /fill="#121512"/);
+  assert.match(icon, /stroke="#d8ff6b"/);
+  assert.doesNotMatch(icon, /#42e8ff|#9b6dff|linearGradient/);
+  assert.match(styles, /\.brand-logo\s*\{[^}]*stroke:\s*currentcolor/s);
+});
+
+test("composer redesign and neutral stop control retain the original theme", async () => {
+  const [index, styles] = await Promise.all([
+    readFile(INDEX, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+  const composer = [...styles.matchAll(/\.composer\s*\{(?<body>[^}]*)\}/g)]
+    .map((match) => match.groups?.body || "")
+    .join("\n");
+  const stop = [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
+    .map((match) => match.groups?.body || "")
+    .join("\n");
+
+  assert.match(index, /class="context-chip-icon" data-icon="settings"/);
+  assert.match(index, /id="stop-turn"[^>]*>[\s\S]*?<rect[^>]+rx="1\.5"/);
+  assert.match(composer, /background:\s*#171b17/);
+  assert.match(composer, /border-radius:\s*22px/);
+  assert.doesNotMatch(composer, /violet|neon|#42e8ff|#9b6dff/);
+  assert.match(stop, /color:\s*var\(--bg\)/);
+  assert.match(stop, /background:\s*var\(--text\)/);
+  assert.match(stop, /border-radius:\s*50%/);
+  assert.doesNotMatch(stop, /danger|warning|#4b1728/);
 });
 
 test(
@@ -814,6 +883,465 @@ test(
       false,
     );
     assert.equal(prompt.value, "/compact");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "busy conversations queue, edit, remove, and automatically send prompts in order",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "queue-thread",
+      name: "Queue test",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const starts = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      if (request.method === "turn/start") {
+        starts.push(request.params);
+        return jsonResponse({
+          result: {
+            turn: {
+              id: `queue-turn-${starts.length}`,
+              status: "inProgress",
+              items: [],
+              error: null,
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=queue-thread",
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === "Queue test",
+      "queue thread was not hydrated",
+    );
+
+    typePrompt(window, "پیام اول");
+    document.querySelector("#send-message").click();
+    await waitFor(() => starts.length === 1, "first prompt was not started");
+
+    typePrompt(window, "پیام دوم با تصویر /tmp/reference.png");
+    document.querySelector("#send-message").click();
+    typePrompt(window, "پیام سوم");
+    document.querySelector("#send-message").click();
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 2);
+    assert.equal(document.querySelector("#prompt").value, "");
+    assert.equal(document.querySelector("#send-message").title, "افزودن به صف");
+
+    document
+      .querySelector(".prompt-queue-item [data-queue-action='edit']")
+      .click();
+    assert.match(document.querySelector("#prompt").value, /reference\.png/);
+    document.querySelector("#prompt").value += " ویرایش‌شده";
+    document.querySelector("#prompt").dispatchEvent(new window.Event("input", { bubbles: true }));
+    document.querySelector("#send-message").click();
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 2);
+    document
+      .querySelector(".prompt-queue-item [data-queue-action='remove']")
+      .click();
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 1);
+
+    FakeEventSource.latest.emit("rpc", {
+      method: "turn/completed",
+      params: {
+        threadId: thread.id,
+        turn: { id: "queue-turn-1", status: "completed", items: [], error: null },
+      },
+    });
+    await waitFor(() => starts.length === 2, "queued prompt did not start automatically");
+    assert.equal(starts[1].input[0].text, "پیام دوم با تصویر /tmp/reference.png ویرایش‌شده");
+    assert.equal(document.querySelectorAll(".prompt-queue-item").length, 0);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "assistant actions quote responses without introducing palette controls",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "actions-thread",
+      name: "Actions test",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [
+        {
+          id: "actions-turn",
+          status: "completed",
+          items: [
+            { id: "assistant-actions", type: "agentMessage", text: "خط اول\nخط دوم" },
+          ],
+        },
+      ],
+    };
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=actions-thread",
+      savedSettings: {
+        cwd: "/workspace",
+        modelByProvider: { codex: "", claude: "" },
+        provider: "codex",
+        version: 5,
+      },
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("[data-item-id='assistant-actions']"),
+      "assistant action response was not rendered",
+    );
+    document
+      .querySelector("[data-item-id='assistant-actions'] [data-message-action='quote']")
+      .click();
+    assert.equal(document.querySelector("#prompt").value, "> خط اول\n> خط دوم\n\n");
+
+    document.querySelector("#open-settings").click();
+    assert.equal(document.querySelector("input[name='accent-palette']"), null);
+    assert.equal(document.documentElement.dataset.palette, undefined);
+    document.querySelector("#settings-cancel").click();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "Plan and Goal modes use native Codex RPC fields and expose goal controls",
+  { concurrency: false },
+  async (t) => {
+    const requests = [];
+    const turns = [];
+    let objective = "";
+    let goalStatus = "active";
+    const thread = {
+      id: "mode-thread",
+      name: "Mode test",
+      cwd: "/workspace",
+      provider: "codex",
+      status: { type: "idle" },
+      turns: [],
+    };
+    const goal = () => ({
+      createdAt: 1,
+      objective,
+      status: goalStatus,
+      threadId: thread.id,
+      timeUsedSeconds: 0,
+      tokenBudget: null,
+      tokensUsed: 0,
+      updatedAt: 1,
+    });
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      if (request.method === "model/list") {
+        return jsonResponse({
+          result: {
+            data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }],
+          },
+        });
+      }
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({
+          result: { data: [{ name: "Plan", mode: "plan", reasoning_effort: "medium" }] },
+        });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") return jsonResponse({ result: { thread } });
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: objective ? goal() : null } });
+      }
+      if (request.method === "thread/goal/set") {
+        if (request.params.objective) objective = request.params.objective;
+        if (request.params.status) goalStatus = request.params.status;
+        return jsonResponse({ result: { goal: goal() } });
+      }
+      if (request.method === "thread/goal/clear") {
+        objective = "";
+        return jsonResponse({ result: { cleared: true } });
+      }
+      if (request.method === "turn/start") {
+        turns.push(request.params);
+        return jsonResponse({
+          result: {
+            turn: { id: "mode-turn", status: "inProgress", items: [], error: null },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      savedSettings: {
+        cwd: "/workspace",
+        modelByProvider: { codex: "", claude: "" },
+        provider: "codex",
+        version: 5,
+      },
+    });
+    const document = window.document;
+    await waitFor(
+      () => requests.some((request) => request.method === "collaborationMode/list"),
+      "collaboration modes were not loaded",
+    );
+
+    document.querySelector("#composer-tools").click();
+    document.querySelector("#plan-mode-option").click();
+    assert.equal(document.querySelector("#plan-mode-option").getAttribute("aria-checked"), "true");
+    assert.equal(document.querySelector("#composer-tool-label").textContent, "Plan");
+
+    document.querySelector("#composer-tools").click();
+    document.querySelector("#goal-mode-option").click();
+    assert.equal(document.querySelector("#goal-dialog").open, true);
+    document.querySelector("#goal-input").value = "همهٔ تست‌ها را سبز کن";
+    document
+      .querySelector("#goal-form")
+      .dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    assert.equal(document.querySelector("#prompt").value, "همهٔ تست‌ها را سبز کن");
+    assert.equal(document.querySelector("#goal-progress").classList.contains("hidden"), false);
+
+    document.querySelector("#goal-edit").click();
+    document.querySelector("#goal-input").value = "تمام تست‌ها را سبز کن";
+    document
+      .querySelector("#goal-form")
+      .dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    assert.equal(document.querySelector("#prompt").value, "تمام تست‌ها را سبز کن");
+
+    document.querySelector("#send-message").click();
+    await waitFor(() => turns.length === 1, "Plan turn was not started");
+    assert.equal(turns[0].input[0].text, "تمام تست‌ها را سبز کن");
+    assert.deepEqual(turns[0].collaborationMode, {
+      mode: "plan",
+      settings: {
+        developer_instructions: null,
+        model: "gpt-test",
+        reasoning_effort: "medium",
+      },
+    });
+    assert.equal(turns[0].developerInstructions, undefined);
+    const threadStart = requests.find((request) => request.method === "thread/start");
+    assert.equal(threadStart.params.developerInstructions, undefined);
+    const methods = requests.map((request) => request.method);
+    assert.equal(methods.indexOf("thread/goal/set") < methods.indexOf("turn/start"), true);
+
+    document.querySelector("#goal-toggle").click();
+    await waitFor(
+      () => document.querySelector("#goal-progress").dataset.status === "paused",
+      "Goal was not paused",
+    );
+    assert.equal(document.querySelector("#goal-progress").dataset.status, "paused");
+
+    document.querySelector("#goal-clear").click();
+    await waitFor(
+      () => document.querySelector("#goal-progress").classList.contains("hidden"),
+      "Goal was not cleared",
+    );
+    assert.equal(document.querySelector("#goal-progress").classList.contains("hidden"), true);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "Dictation inserts editable Persian speech into the composer",
+  { concurrency: false },
+  async (t) => {
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+    const { window } = await createHarness(t, { fetchHandler });
+    class FakeSpeechRecognition {
+      static latest = null;
+      constructor() {
+        FakeSpeechRecognition.latest = this;
+      }
+      start() {}
+      stop() {
+        this.onend?.();
+      }
+    }
+    window.SpeechRecognition = FakeSpeechRecognition;
+    const document = window.document;
+    typePrompt(window, "مقدمه");
+    document.querySelector("#dictate").click();
+    assert.equal(document.querySelector("#dictate").classList.contains("active"), true);
+    const result = [{ transcript: "این متن با صدا نوشته شد" }];
+    result.isFinal = true;
+    FakeSpeechRecognition.latest.onresult({ results: [result] });
+    assert.equal(
+      document.querySelector("#prompt").value,
+      "مقدمه این متن با صدا نوشته شد",
+    );
+    document.querySelector("#dictate").click();
+    assert.equal(document.querySelector("#dictate").classList.contains("active"), false);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "recorded voice uploads securely and starts a localAudio turn",
+  { concurrency: false },
+  async (t) => {
+    const turns = [];
+    let audioUploads = 0;
+    let threadListLoaded = false;
+    const thread = {
+      id: "voice-thread",
+      name: "Voice test",
+      cwd: "/workspace",
+      provider: "codex",
+      status: { type: "idle" },
+      turns: [],
+    };
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/uploads/audio") {
+        audioUploads += 1;
+        assert.equal(options.headers["Content-Type"], "audio/webm");
+        return jsonResponse({ path: "C:\\voice\\message.webm", type: "audio/webm" }, 201);
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        threadListLoaded = true;
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") return jsonResponse({ result: { thread } });
+      if (request.method === "thread/goal/get") return jsonResponse({ result: { goal: null } });
+      if (request.method === "turn/start") {
+        turns.push(request.params);
+        return jsonResponse({
+          result: {
+            turn: { id: "voice-turn", status: "inProgress", items: [], error: null },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+    const { window } = await createHarness(t, { fetchHandler });
+    let trackStopped = false;
+    let microphoneRequests = 0;
+    let recorderStarts = 0;
+    let recorderStops = 0;
+    const mediaDevices = {
+      async getUserMedia() {
+        microphoneRequests += 1;
+        return { getTracks: () => [{ stop: () => (trackStopped = true) }] };
+      },
+    };
+    Object.defineProperty(window.navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+    class FakeMediaRecorder {
+      static isTypeSupported(type) {
+        return type.startsWith("audio/webm");
+      }
+      constructor(stream, options = {}) {
+        this.stream = stream;
+        this.mimeType = options.mimeType || "audio/webm";
+        this.state = "inactive";
+      }
+      start() {
+        recorderStarts += 1;
+        this.state = "recording";
+      }
+      stop() {
+        recorderStops += 1;
+        this.state = "inactive";
+        this.ondataavailable?.({
+          data: new Blob([Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3])], {
+            type: "audio/webm",
+          }),
+        });
+        this.onstop?.();
+      }
+    }
+    Object.defineProperty(window, "MediaRecorder", {
+      configurable: true,
+      value: FakeMediaRecorder,
+    });
+    assert.equal(window.MediaRecorder, FakeMediaRecorder);
+    const document = window.document;
+    await waitFor(() => threadListLoaded, "initial thread list was not loaded");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitFor(() => !document.querySelector("#record-voice").disabled, "voice button stayed disabled");
+    document
+      .querySelector("#record-voice")
+      .dispatchEvent(new window.Event("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(document.querySelector("#toasts").textContent.trim(), "");
+    assert.equal(microphoneRequests, 1);
+    assert.equal(recorderStarts, 1);
+    assert.equal(recorderStops, 0);
+    assert.equal(document.querySelector("#voice-recorder").className, "voice-recorder");
+    await waitFor(
+      () => !document.querySelector("#voice-recorder").classList.contains("hidden"),
+      "voice recorder did not open",
+    );
+    document.querySelector("#voice-send").click();
+    await waitFor(() => turns.length === 1, "voice turn was not started");
+    assert.equal(audioUploads, 1);
+    assert.deepEqual(turns[0].input, [
+      { type: "localAudio", path: "C:\\voice\\message.webm" },
+    ]);
+    assert.equal(trackStopped, true);
+    assert.match(document.querySelector(".message-row.user .message-content").textContent, /پیام صوتی/);
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );

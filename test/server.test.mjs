@@ -189,6 +189,31 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   });
   assert.equal(invalidUploadResponse.status, 415);
 
+  const webm = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x01, 0x00, 0x00, 0x00]);
+  const audioUploadResponse = await fetch(`${baseUrl}/api/uploads/audio`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "audio/webm;codecs=opus",
+      "X-File-Name": encodeURIComponent("پیام صوتی.webm"),
+    },
+    body: webm,
+  });
+  assert.equal(audioUploadResponse.status, 201);
+  const audioUpload = await audioUploadResponse.json();
+  assert.equal(audioUpload.path.startsWith(join(cacheHome, "codex-web", "uploads")), true);
+  assert.deepEqual(await readFile(audioUpload.path), webm);
+  assert.equal((await stat(audioUpload.path)).mode & 0o777, 0o600);
+
+  const invalidAudioUploadResponse = await fetch(`${baseUrl}/api/uploads/audio`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "audio/webm",
+      "X-File-Name": "invalid.webm",
+    },
+    body: Buffer.from("not webm"),
+  });
+  assert.equal(invalidAudioUploadResponse.status, 415);
+
   const threadResponse = await fetch(`${baseUrl}/api/rpc`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -207,6 +232,20 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   });
   assert.equal(compactResponse.status, 200);
   assert.deepEqual(await compactResponse.json(), { result: {} });
+
+  for (const [method, params] of [
+    ["collaborationMode/list", {}],
+    ["thread/goal/get", { threadId: "test-thread" }],
+    ["thread/goal/set", { threadId: "test-thread", objective: "هدف تست", status: "active" }],
+    ["thread/goal/clear", { threadId: "test-thread" }],
+  ]) {
+    const response = await fetch(`${baseUrl}/api/rpc`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method, params }),
+    });
+    assert.equal(response.status, 200);
+  }
 
   const rejectedMethod = "thread/delete";
   const rejectedRpcResponse = await fetch(`${baseUrl}/api/rpc`, {
@@ -240,6 +279,14 @@ test("server starts with a fake Codex bridge and enforces local security boundar
     (message) => message.method === "thread/compact/start",
   );
   assert.deepEqual(compactStart?.params, { threadId: "test-thread" });
+  for (const method of [
+    "collaborationMode/list",
+    "thread/goal/get",
+    "thread/goal/set",
+    "thread/goal/clear",
+  ]) {
+    assert.equal(messages.some((message) => message.method === method), true);
+  }
   assert.equal(
     messages.some((message) => message.method === rejectedMethod),
     false,
