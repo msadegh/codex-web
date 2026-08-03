@@ -679,36 +679,31 @@ test("plan step text can shrink and wrap unbroken paths on narrow viewports", as
   assert.match(rule, /overflow-wrap:\s*anywhere/);
 });
 
-test("conversation typography keeps ChatGPT-like readable dimensions", async () => {
-  const styles = await readFile(STYLES, "utf8");
+test("feature UI preserves the original Codex Web theme and conversation dimensions", async () => {
+  const [app, index, styles] = await Promise.all([
+    readFile(APP, "utf8"),
+    readFile(INDEX, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
   const root = styles.match(/:root\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const page = styles.match(/html,\s*body\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
-  const assistant =
-    styles.match(/\.assistant \.message-content\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const messages = styles.match(/\.messages\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
-  const headings =
-    styles.match(
-      /\.message-content h1,\s*\.message-content h2,\s*\.message-content h3\s*\{(?<body>[^}]*)\}/,
-    )?.groups?.body || "";
-  const listMarker =
-    styles.match(/\.message-content li::marker\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
 
-  assert.match(root, /--bg:\s*#212121/);
-  assert.match(root, /--text:\s*#ececec/);
-  assert.match(page, /font-size:\s*16px/);
-  assert.match(page, /line-height:\s*1\.75/);
-  assert.match(assistant, /font-size:\s*1rem/);
-  assert.match(assistant, /line-height:\s*1\.75/);
-  assert.match(messages, /width:\s*min\(48rem,/);
-  assert.match(composer, /width:\s*min\(48rem,/);
-  assert.match(headings, /font-weight:\s*700/);
-  assert.match(headings, /text-wrap:\s*pretty/);
-  assert.match(listMarker, /color:\s*var\(--muted-2\)/);
-  assert.doesNotMatch(listMarker, /accent|danger|warning/);
+  assert.match(root, /--bg:\s*#0d0f0d/);
+  assert.match(root, /--panel:\s*#121512/);
+  assert.match(root, /--text:\s*#f1f4ed/);
+  assert.match(root, /--accent:\s*#d8ff6b/);
+  assert.match(page, /font-size:\s*15px/);
+  assert.match(page, /line-height:\s*1\.65/);
+  assert.match(messages, /width:\s*min\(860px,/);
+  assert.match(composer, /width:\s*min\(850px,/);
+  assert.doesNotMatch(styles, /data-palette|--neon-gradient|--violet/);
+  assert.doesNotMatch(index, /accent-palette|palette-field/);
+  assert.doesNotMatch(app, /applyPalette|ACCENT_PALETTES/);
 });
 
-test("favicon and in-app marks share a palette-aware terminal logo", async () => {
+test("favicon and in-app marks use the new terminal logo in the original theme", async () => {
   const [index, icon, styles] = await Promise.all([
     readFile(INDEX, "utf8"),
     readFile(ICON, "utf8"),
@@ -717,47 +712,33 @@ test("favicon and in-app marks share a palette-aware terminal logo", async () =>
 
   assert.match(index, /rel="icon" href="\/icon\.svg\?v=2"[^>]+sizes="any"/);
   assert.equal((index.match(/class="brand-logo"/g) || []).length, 2);
-  assert.match(icon, /id="neon"/);
-  assert.match(icon, /#42e8ff/);
-  assert.match(icon, /#9b6dff/);
-  assert.doesNotMatch(icon, /#d8ff6b/);
+  assert.match(icon, /fill="#121512"/);
+  assert.match(icon, /stroke="#d8ff6b"/);
+  assert.doesNotMatch(icon, /#42e8ff|#9b6dff|linearGradient/);
   assert.match(styles, /\.brand-logo\s*\{[^}]*stroke:\s*currentcolor/s);
 });
 
-test("composer uses a neon palette frame and neutral ChatGPT-like stop control", async () => {
+test("composer redesign and neutral stop control retain the original theme", async () => {
   const [index, styles] = await Promise.all([
     readFile(INDEX, "utf8"),
     readFile(STYLES, "utf8"),
   ]);
-  const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
-  const stop =
-    [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
-      .map((match) => match.groups?.body || "")
-      .find((rule) => /background:/.test(rule)) || "";
+  const composer = [...styles.matchAll(/\.composer\s*\{(?<body>[^}]*)\}/g)]
+    .map((match) => match.groups?.body || "")
+    .join("\n");
+  const stop = [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
+    .map((match) => match.groups?.body || "")
+    .join("\n");
 
   assert.match(index, /class="context-chip-icon" data-icon="settings"/);
   assert.match(index, /id="stop-turn"[^>]*>[\s\S]*?<rect[^>]+rx="1\.5"/);
-  assert.match(composer, /linear-gradient\(var\(--panel-3\), var\(--panel-3\)\) padding-box/);
-  assert.match(composer, /rgb\(var\(--accent-rgb\) \/ 0\.58\)/);
-  assert.match(composer, /rgb\(var\(--violet-rgb\) \/ 0\.46\)/);
+  assert.match(composer, /background:\s*#171b17/);
+  assert.match(composer, /border-radius:\s*22px/);
+  assert.doesNotMatch(composer, /violet|neon|#42e8ff|#9b6dff/);
   assert.match(stop, /color:\s*var\(--bg\)/);
   assert.match(stop, /background:\s*var\(--text\)/);
   assert.match(stop, /border-radius:\s*50%/);
   assert.doesNotMatch(stop, /danger|warning|#4b1728/);
-});
-
-test("failed technical activity chips stay visually neutral", async () => {
-  const styles = await readFile(STYLES, "utf8");
-  const failedSummary =
-    styles.match(/\.activity-card\.failed summary\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
-  const failedIcon =
-    styles.match(/\.activity-card\.failed summary::before\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
-
-  assert.match(failedSummary, /color:\s*var\(--muted\)/);
-  assert.match(failedSummary, /background:\s*var\(--panel-2\)/);
-  assert.doesNotMatch(failedSummary, /--danger/);
-  assert.match(failedIcon, /color:\s*var\(--muted-2\)/);
-  assert.match(failedIcon, /content:\s*"›"/);
 });
 
 test(
@@ -998,7 +979,7 @@ test(
 );
 
 test(
-  "assistant actions quote responses and palette previews revert or persist correctly",
+  "assistant actions quote responses without introducing palette controls",
   { concurrency: false },
   async (t) => {
     const now = Math.floor(Date.now() / 1000);
@@ -1033,13 +1014,12 @@ test(
       throw new Error(`Unexpected RPC method: ${request.method}`);
     };
 
-    const { values, window } = await createHarness(t, {
+    const { window } = await createHarness(t, {
       fetchHandler,
       initialUrl: "http://localhost/?session=actions-thread",
       savedSettings: {
         cwd: "/workspace",
         modelByProvider: { codex: "", claude: "" },
-        palette: "red",
         provider: "codex",
         version: 5,
       },
@@ -1054,22 +1034,10 @@ test(
       .click();
     assert.equal(document.querySelector("#prompt").value, "> خط اول\n> خط دوم\n\n");
 
-    assert.equal(document.documentElement.dataset.palette, "red");
     document.querySelector("#open-settings").click();
-    const purple = document.querySelector("input[name='accent-palette'][value='purple']");
-    purple.checked = true;
-    purple.dispatchEvent(new window.Event("change", { bubbles: true }));
-    assert.equal(document.documentElement.dataset.palette, "purple");
+    assert.equal(document.querySelector("input[name='accent-palette']"), null);
+    assert.equal(document.documentElement.dataset.palette, undefined);
     document.querySelector("#settings-cancel").click();
-    assert.equal(document.documentElement.dataset.palette, "red");
-
-    document.querySelector("#open-settings").click();
-    const green = document.querySelector("input[name='accent-palette'][value='green']");
-    green.checked = true;
-    green.dispatchEvent(new window.Event("change", { bubbles: true }));
-    document.querySelector("#save-settings").click();
-    assert.equal(document.documentElement.dataset.palette, "green");
-    assert.equal(JSON.parse(values.get("codex-web-settings")).palette, "green");
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );
@@ -1149,7 +1117,6 @@ test(
       savedSettings: {
         cwd: "/workspace",
         modelByProvider: { codex: "", claude: "" },
-        palette: "cyan",
         provider: "codex",
         version: 5,
       },

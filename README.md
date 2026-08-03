@@ -32,8 +32,8 @@ many terminals.
   pause, resume, edit, clear, and progress state.
 - Offers browser dictation plus recorded voice messages sent to Codex as
   structured local-audio input.
-- Guides regular Codex turns toward scan-friendly answers and gives Markdown
-  headings, lists, and emphasis a clearer ChatGPT-like visual hierarchy.
+- Guides regular Codex turns toward scan-friendly answers while preserving the
+  existing Codex Web visual theme.
 - Uploads multiple images or accepts pasted screenshots and inserts their
   server-side paths into the prompt.
 - Queues follow-up prompts while a turn is running and can quote a selected
