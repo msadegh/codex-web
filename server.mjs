@@ -10,6 +10,11 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { ClaudeProvider } from "./providers/claude-provider.mjs";
+import {
+  authorizeRequest,
+  defaultTailscaleBinary,
+  TailscaleRemoteAccess,
+} from "./remote-access.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -24,10 +29,11 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`Codex Web ${PACKAGE.version}
 
 Usage:
-  codex-web [CODEX_OPTIONS]
+  codex-web [WEB_OPTIONS] [CODEX_OPTIONS]
 
 Web options:
   --no-open                 Do not open a browser automatically
+  --remote                  Share privately through Tailscale Serve
   -h, --help                Show this help
   -V, --version             Show the version
 
@@ -45,7 +51,11 @@ Environment:
   CODEX_WEB_PORT            HTTP port (default: 4173)
   CODEX_WEB_CWD             Default working directory (default: current directory)
   CODEX_WEB_NO_OPEN=1       Do not open a browser automatically
+  CODEX_WEB_REMOTE=1        Enable private Tailscale remote access
+  CODEX_WEB_REMOTE_PORT     Tailscale HTTPS port (default: CODEX_WEB_PORT)
+  CODEX_WEB_REMOTE_USER     Allowed Tailscale login (default: device owner)
   CODEX_WEB_UPLOAD_DIR      Image upload cache directory
+  TAILSCALE_BIN             Tailscale executable (default: auto-detected)
   CODEX_BIN                 Codex executable (default: codex)
   CLAUDE_BIN                Claude Code executable (default: claude)
   CLAUDE_CONFIG_DIR         Claude Code config/session directory (default: ~/.claude)
@@ -54,7 +64,17 @@ Environment:
 }
 
 const HOST = "127.0.0.1";
-const PORT = parsePort(process.env.CODEX_WEB_PORT ?? "4173");
+const PORT = parsePort(process.env.CODEX_WEB_PORT ?? "4173", "CODEX_WEB_PORT");
+const REMOTE_ENABLED =
+  process.argv.includes("--remote") || process.env.CODEX_WEB_REMOTE === "1";
+const REMOTE_PORT = REMOTE_ENABLED
+  ? parsePort(
+      process.env.CODEX_WEB_REMOTE_PORT ?? String(PORT),
+      "CODEX_WEB_REMOTE_PORT",
+    )
+  : PORT;
+const REMOTE_USER = process.env.CODEX_WEB_REMOTE_USER || "";
+const TAILSCALE_BIN = defaultTailscaleBinary();
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
 const CLAUDE_CONFIG_DIR = resolve(
@@ -63,7 +83,14 @@ const CLAUDE_CONFIG_DIR = resolve(
     join(os.homedir(), ".claude"),
 );
 const DEFAULT_CWD = process.env.CODEX_WEB_CWD || process.cwd();
-const WEB_ARGS = new Set(["--no-open", "--help", "-h", "--version", "-V"]);
+const WEB_ARGS = new Set([
+  "--no-open",
+  "--remote",
+  "--help",
+  "-h",
+  "--version",
+  "-V",
+]);
 const RAW_CODEX_ARGS = process.argv.slice(2).filter((arg) => !WEB_ARGS.has(arg));
 const { serverArgs: CODEX_ARGS, threadDefaults: CLI_THREAD_DEFAULTS } =
   prepareCodexArgs(RAW_CODEX_ARGS);
@@ -135,10 +162,10 @@ const MIME_TYPES = {
 const clients = new Set();
 const pendingServerRequests = new Map();
 
-function parsePort(value) {
+function parsePort(value, name) {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid CODEX_WEB_PORT: ${value}`);
+    throw new Error(`Invalid ${name}: ${value}`);
   }
   return port;
 }
@@ -463,13 +490,6 @@ function imageUploadName(originalName, type) {
   return `${randomUUID()}-${safeStem || "image"}${IMAGE_TYPES.get(type)}`;
 }
 
-function isSameOrigin(req) {
-  const host = req.headers.host || "";
-  if (!/^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(host)) return false;
-  const origin = req.headers.origin;
-  return !origin || origin === `http://${host}`;
-}
-
 class CodexBridge {
   constructor() {
     this.proc = null;
@@ -697,6 +717,21 @@ const claudeProvider = new ClaudeProvider({
   emit: (message) => broadcast("rpc", message),
   log: (message) => broadcast("log", { level: "stderr", message }),
 });
+const remoteAccess = REMOTE_ENABLED
+  ? new TailscaleRemoteAccess({
+      localPort: PORT,
+      remotePort: REMOTE_PORT,
+      binary: TAILSCALE_BIN,
+      expectedUser: REMOTE_USER,
+      onOutput: (text, stream) => {
+        (stream === "stderr" ? process.stderr : process.stdout).write(text);
+      },
+      onUnexpectedExit: (error) => {
+        console.error(`Remote access stopped: ${error.message}`);
+        void shutdown(1);
+      },
+    })
+  : null;
 
 function providerForRequest(method, params = {}) {
   if (params.provider === "claude") return "claude";
@@ -780,11 +815,12 @@ async function serveStatic(req, res, url) {
 
 const server = createServer(async (req, res) => {
   try {
-    const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
-
-    if (url.pathname.startsWith("/api/") && !isSameOrigin(req)) {
-      return json(res, 403, { error: "Only same-origin localhost requests are allowed" });
+    const access = authorizeRequest(req, remoteAccess?.authorization());
+    if (!access.ok) {
+      return json(res, 403, { error: "This request is not allowed" });
     }
+
+    const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
 
     if (req.method === "GET" && url.pathname === "/api/events") {
       const claudeStatus = await claudeProvider.status();
@@ -801,6 +837,7 @@ const server = createServer(async (req, res) => {
           codex: { ready: bridge.ready, binary: CODEX_BIN },
           claude: claudeStatus,
         },
+        remote: remoteAccess?.status() || { enabled: false, ready: false, url: null },
       })}\n\n`);
       res.write(
         ssePayload("pending-interactions", {
@@ -824,6 +861,7 @@ const server = createServer(async (req, res) => {
         },
         cwd: DEFAULT_CWD,
         port: PORT,
+        remote: remoteAccess?.status() || { enabled: false, ready: false, url: null },
       });
     }
 
@@ -915,21 +953,36 @@ server.on("error", (error) => {
 });
 
 server.listen(PORT, HOST, async () => {
-  const url = `http://${HOST}:${PORT}`;
-  console.log(`Codex Web is available at ${url}`);
+  const localUrl = `http://${HOST}:${PORT}`;
+  let browserUrl = localUrl;
+  console.log(`Codex Web is available locally at ${localUrl}`);
   console.log(`Working directory default: ${DEFAULT_CWD}`);
 
   bridge.start().catch((error) => {
     console.error(`Could not connect to Codex app-server: ${error.message}`);
   });
 
+  if (remoteAccess) {
+    console.log("Starting private Tailscale remote access…");
+    try {
+      const remote = await remoteAccess.start();
+      browserUrl = remote.url;
+      console.log(`Codex Web is available privately at ${remote.url}`);
+      console.log("Only the authorized Tailscale account can open this URL.");
+    } catch (error) {
+      console.error(`Could not start remote access: ${error.message}`);
+      await shutdown(1);
+      return;
+    }
+  }
+
   if (SHOULD_OPEN) {
     const command =
       process.platform === "darwin"
-        ? ["open", [url]]
+        ? ["open", [browserUrl]]
         : process.platform === "win32"
-          ? ["cmd", ["/c", "start", "", url]]
-          : ["xdg-open", [url]];
+          ? ["cmd", ["/c", "start", "", browserUrl]]
+          : ["xdg-open", [browserUrl]];
     const opener = spawn(command[0], command[1], { detached: true, stdio: "ignore" });
     opener.on("error", () => {});
     opener.unref();
@@ -943,11 +996,11 @@ heartbeat.unref();
 
 let shuttingDown = false;
 
-async function shutdown() {
+async function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(heartbeat);
-  const forceExit = setTimeout(() => process.exit(0), 3_500);
+  const forceExit = setTimeout(() => process.exit(exitCode), 3_500);
   forceExit.unref();
   const serverClosed = new Promise((resolveClosed) => {
     server.close(resolveClosed);
@@ -956,12 +1009,13 @@ async function shutdown() {
   clients.clear();
   server.closeIdleConnections?.();
   server.closeAllConnections?.();
+  await remoteAccess?.stop();
   bridge.stop();
   await claudeProvider.stop();
   await serverClosed;
   clearTimeout(forceExit);
-  process.exit(0);
+  process.exit(exitCode);
 }
 
-process.on("SIGINT", () => void shutdown());
-process.on("SIGTERM", () => void shutdown());
+process.on("SIGINT", () => void shutdown(0));
+process.on("SIGTERM", () => void shutdown(0));

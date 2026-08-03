@@ -17,6 +17,7 @@
   "files": [
     "public",
     "providers",
+    "remote-access.mjs",
     "server.mjs",
     "README.md",
     "README.fa.md",
@@ -27,7 +28,7 @@
   "scripts": {
     "start": "node server.mjs",
     "start:no-open": "node server.mjs --no-open",
-    "check": "node --check server.mjs && node --check providers/claude-provider.mjs && node --check public/app.js && node --check public/markdown.js",
+    "check": "node --check server.mjs && node --check remote-access.mjs && node --check providers/claude-provider.mjs && node --check public/app.js && node --check public/markdown.js",
     "test": "node --test"
   },
   "devDependencies": {

@@ -99,6 +99,8 @@ test("CLI exposes help and version without starting the server", async () => {
   assert.equal((await once(help, "exit"))[0], 0);
   assert.match(helpOutput, /Usage:\s+codex-web/);
   assert.match(helpOutput, /always listens on 127\.0\.0\.1/);
+  assert.match(helpOutput, /--remote\s+Share privately through Tailscale Serve/);
+  assert.match(helpOutput, /CODEX_WEB_REMOTE_PORT/);
 });
 
 test("server starts with a fake Codex bridge and enforces local security boundaries", async (t) => {

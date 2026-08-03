@@ -55,12 +55,14 @@ equivalent to shell access as the operating-system user that started it,
 especially when Codex `--yolo` or Claude `bypassPermissions` is enabled.
 
 - The HTTP server deliberately listens only on `127.0.0.1`.
-- It does **not** include web authentication.
+- Local access does **not** include a separate web login. Optional Tailscale
+  remote mode authenticates the proxy identity before serving any route.
 - Loopback is not authentication against other users or processes on the same
   server; use a trusted single-user host or additional OS/network isolation.
 - Never expose the HTTP port (`4173` by default) directly to the internet or
   change the listener to `0.0.0.0`.
-- Use an authenticated SSH tunnel for remote access.
+- Use `--remote` with Tailscale Serve or an authenticated SSH tunnel for remote
+  access. Never use a public reverse proxy or Tailscale Funnel.
 - On a remote machine, prefer a dedicated low-privilege user, container, or VM.
 - Codex `--yolo` disables the Codex sandbox and approval prompts; it does not
   configure Claude.
@@ -83,6 +85,8 @@ See [SECURITY.md](SECURITY.md) before running Codex Web on a server.
 - A recent Claude Code CLI release if you use the Claude provider.
 - A configured login, provider profile, or environment-based credentials for
   each provider you plan to use.
+- Tailscale on the computer and client device, signed into the same account, if
+  you use optional `--remote` mode.
 
 The current release is tested with Codex CLI `0.145.0`; other recent versions
 may work, but the experimental app-server protocol can change. The Claude
@@ -164,6 +168,39 @@ codex-web -p work --yolo --search
 codex-web --no-open
 ```
 
+## Private phone access with Tailscale
+
+Install Tailscale on the computer and Android device and sign into the same
+account. Then start Codex Web on the computer:
+
+```bash
+codex-web --remote
+```
+
+Open the private URL printed in the terminal on Android. The local server
+still listens only on `127.0.0.1`; Tailscale Serve runs in the foreground and
+stops with Codex Web. Remote requests must arrive through Tailscale Serve and
+match the computer owner's Tailscale identity. Tagged devices, shared-device
+users, direct LAN access, Funnel, and public reverse proxies are not accepted.
+
+The first run may show a Tailscale consent URL to enable HTTPS/Serve. Complete
+that one-time step and retry the command. If a custom Tailscale control plane
+explicitly reports that HTTPS is not implemented, Codex Web falls back to
+private HTTP inside the encrypted tailnet and prints a warning. Text chat still
+works, but browser features that require a secure context—such as microphone
+access—may remain unavailable until HTTPS is supported.
+
+Codex Web uses the local HTTP port as the private Serve port by default, so it
+does not replace an existing Serve configuration on port `443`. If that port is
+already configured, choose an unused one instead:
+
+```bash
+CODEX_WEB_REMOTE_PORT=44173 codex-web --remote
+```
+
+Use `Ctrl+C` to stop both Codex Web and its temporary remote route. This mode
+does not make the service public and does not require opening a router port.
+
 The child `codex app-server` inherits the environment of `codex-web`, so
 provider keys should stay in the shell or service environment and must never be
 committed.
@@ -194,6 +231,7 @@ Codex Web translates these options for the Codex provider:
 | `--search` | Enables live web search |
 | `-c`, `--enable`, `--disable`, `--strict-config` | Compatible global Codex configuration options forwarded before `app-server` |
 | `--no-open` | Does not open the browser automatically |
+| `--remote` | Starts private, owner-authenticated Tailscale Serve access |
 
 The Codex app-server currently has no profile flag, so Codex Web converts the
 named profile's top-level scalar values to `-c` overrides. TOML tables in a
@@ -211,8 +249,12 @@ Run `codex-web --help` to see the local command help.
 | `CODEX_WEB_PORT` | `4173` | Local HTTP port |
 | `CODEX_WEB_CWD` | launch directory | Default working directory |
 | `CODEX_WEB_NO_OPEN` | unset | Set to `1` to suppress browser opening |
+| `CODEX_WEB_REMOTE` | unset | Set to `1` to enable private Tailscale remote access |
+| `CODEX_WEB_REMOTE_PORT` | `CODEX_WEB_PORT` | Private Tailscale HTTPS port |
+| `CODEX_WEB_REMOTE_USER` | device owner's login | Advanced override for the allowed Tailscale login |
 | `CODEX_WEB_UPLOAD_DIR` | Codex Web cache directory | Where uploaded images are stored |
 | `XDG_CACHE_HOME` | `~/.cache` on Linux | Base cache directory |
+| `TAILSCALE_BIN` | auto-detected | Path to the Tailscale executable |
 | `CODEX_BIN` | `codex` | Path to the Codex executable |
 | `CLAUDE_BIN` | `claude` | Path to the Claude Code executable |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code settings, credentials, plugins, and native sessions |
@@ -373,7 +415,7 @@ ssh -o ExitOnForwardFailure=yes -N \
 
 Then visit <http://127.0.0.1:44173>.
 
-### Connect from a phone
+### Connect from a phone without Tailscale Serve
 
 Use an SSH client that supports local port forwarding, such as Termius, Blink,
 or Termux. Create the same mapping:
@@ -386,10 +428,10 @@ Keep the SSH tunnel active and open `http://127.0.0.1:4173` in the phone's
 browser. Mobile operating systems may suspend the SSH application in the
 background; allow it to remain active if necessary.
 
-Tailscale may protect the SSH connection itself, but Codex Web should still be
-reached through loopback forwarding. Direct URLs and public reverse-proxy
-deployment—even with proxy authentication—are unsupported in this release;
-SSH loopback forwarding is the documented remote-access method.
+For everyday Android access, the simpler option is the private
+[`--remote` Tailscale mode](#private-phone-access-with-tailscale). Keep using an
+SSH loopback tunnel when Tailscale Serve is unavailable. Direct LAN exposure,
+public reverse proxies, and Tailscale Funnel remain unsupported.
 
 ## Update
 
