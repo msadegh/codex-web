@@ -31,8 +31,9 @@ many terminals.
 - Supports native Codex Plan mode and persistent Goal mode, including goal
   pause, resume, edit, clear, and progress state.
 - Offers browser dictation that turns speech into editable prompt text.
-- Guides regular Codex turns toward scan-friendly answers while preserving the
-  existing Codex Web visual theme.
+- Adaptively structures multi-part Codex answers with semantic Markdown
+  headings and real lists while keeping simple answers compact and preserving
+  the existing Codex Web visual theme.
 - Uploads multiple images or accepts pasted screenshots and inserts their
   server-side paths into the prompt.
 - Queues follow-up prompts while a turn is running and can quote a selected

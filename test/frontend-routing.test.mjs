@@ -553,7 +553,7 @@ test(
     assert.equal(finalUrl.hash, "#composer");
     assert.match(
       threadStarts[0].developerInstructions,
-      /short descriptive headings, bullet lists, or numbered steps/,
+      /Turn list-like prose into real lists/,
     );
   },
 );

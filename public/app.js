@@ -8,7 +8,7 @@ const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const RESPONSE_STYLE_INSTRUCTIONS =
-  "Make final responses easy to scan. When useful, use short descriptive headings, bullet lists, or numbered steps. Keep simple answers simple, use compact paragraphs, and avoid unnecessary sections, repetitive summaries, or decorative formatting.";
+  "Make final responses adaptively structured and easy to scan. Lead with the direct answer or outcome. If a response contains multiple distinct parts, organize it with Markdown: use short descriptive ## headings for major sections, ### only for genuine subsections, bullets for three or more parallel items, options, or findings, and numbered lists only for ordered actions. Keep paragraphs to one to three sentences and use bold labels sparingly for scan points. Turn list-like prose into real lists. Keep simple answers as a short paragraph. Avoid # headings, deep nesting, decorative sections, redundant summaries, and tables unless a comparison is genuinely clearer.";
 const IMAGE_EXTENSIONS = {
   "image/avif": "avif",
   "image/bmp": "bmp",
