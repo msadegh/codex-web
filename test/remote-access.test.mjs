@@ -247,6 +247,8 @@ test("starts Serve in the foreground and stops it with Codex Web", async () => {
     enabled: true,
     ready: true,
     url: "https://workstation.example.ts.net:4173",
+    protocol: "https",
+    secureContext: true,
   });
   assert.deepEqual(calls, [
     ["status", "--json"],
@@ -264,6 +266,8 @@ test("starts Serve in the foreground and stops it with Codex Web", async () => {
   await remote.stop();
   assert.deepEqual(child.killedWith, ["SIGTERM"]);
   assert.equal(remote.status().ready, false);
+  assert.equal(remote.status().protocol, null);
+  assert.equal(remote.status().secureContext, false);
   assert.equal(unexpectedExit, null);
 });
 
@@ -303,6 +307,8 @@ test("falls back to private HTTP when the control plane does not implement HTTPS
     enabled: true,
     ready: true,
     url: "http://workstation.example.ts.net:4173",
+    protocol: "http",
+    secureContext: false,
   });
   assert.deepEqual(calls, [
     ["serve", "--https=4173", "http://127.0.0.1:4173"],

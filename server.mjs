@@ -969,6 +969,11 @@ server.listen(PORT, HOST, async () => {
       browserUrl = remote.url;
       console.log(`Codex Web is available privately at ${remote.url}`);
       console.log("Only the authorized Tailscale account can open this URL.");
+      if (!remote.secureContext) {
+        console.warn(
+          "Private HTTP is active. Android Chrome may ask for microphone permission each time; use the keyboard microphone if browser Dictation is blocked.",
+        );
+      }
     } catch (error) {
       console.error(`Could not start remote access: ${error.message}`);
       await shutdown(1);

@@ -183,12 +183,19 @@ stops with Codex Web. Remote requests must arrive through Tailscale Serve and
 match the computer owner's Tailscale identity. Tagged devices, shared-device
 users, direct LAN access, Funnel, and public reverse proxies are not accepted.
 
+For voice prompts, tap **Dictate** in Codex Web, allow microphone access, review
+the transcript, and send it normally. If Android Chrome does not expose browser
+Dictation on the private HTTP fallback, focus the prompt and use the microphone
+on Gboard instead. Both paths produce editable text, so prompts can be queued
+while the previous turn is still running; Codex continues working on this
+computer and approvals remain available from the phone.
+
 The first run may show a Tailscale consent URL to enable HTTPS/Serve. Complete
 that one-time step and retry the command. If a custom Tailscale control plane
 explicitly reports that HTTPS is not implemented, Codex Web falls back to
-private HTTP inside the encrypted tailnet and prints a warning. Text chat still
-works, but browser features that require a secure context—such as microphone
-access—may remain unavailable until HTTPS is supported.
+private HTTP inside the encrypted tailnet and prints a warning. Text chat and
+keyboard dictation still work. Chrome may ask for browser microphone permission
+again on HTTP; use Gboard's microphone if the in-page Dictate button is blocked.
 
 Codex Web uses the local HTTP port as the private Serve port by default, so it
 does not replace an existing Serve configuration on port `443`. If that port is
@@ -340,7 +347,7 @@ Browsers do not reveal a selected file's original absolute path. Codex Web
 therefore copies each image to the machine running the server—normally
 `~/.cache/codex-web/uploads`—and inserts that server-side absolute path into the
 prompt. During remote use, images selected on your laptop or phone are uploaded
-through the SSH tunnel to the server.
+through the active private connection to the server.
 
 Uploads remain in the cache so old conversation paths continue to work. Review
 and remove unused sensitive images manually. There is no

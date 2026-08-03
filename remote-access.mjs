@@ -274,6 +274,8 @@ export class TailscaleRemoteAccess {
       enabled: true,
       ready: this.ready,
       url: this.url,
+      protocol: this.protocol,
+      secureContext: this.protocol === "https",
     };
   }
 
