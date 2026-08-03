@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { win32 as win32Path } from "node:path";
 
 const LOCAL_HOST_PATTERN = /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i;
 const LOOPBACK_ADDRESSES = new Set([
@@ -65,7 +65,7 @@ export function defaultTailscaleBinary({
 } = {}) {
   if (env.TAILSCALE_BIN) return env.TAILSCALE_BIN;
   if (platform === "win32") {
-    const candidate = join(
+    const candidate = win32Path.join(
       env.ProgramFiles || "C:\\Program Files",
       "Tailscale",
       "tailscale.exe",
