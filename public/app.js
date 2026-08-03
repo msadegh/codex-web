@@ -1132,6 +1132,25 @@ function stopDictation() {
   return true;
 }
 
+function dictationErrorMessage(errorCode) {
+  if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+    if (!window.isSecureContext) {
+      return "Chrome اجازهٔ Dictation را روی این آدرس نداد؛ از میکروفون Gboard داخل فیلد پیام استفاده کنید.";
+    }
+    return "اجازهٔ میکروفون برای Dictation داده نشد؛ دسترسی Microphone این سایت را فعال کنید.";
+  }
+  if (errorCode === "audio-capture") {
+    return "میکروفون در دسترس نیست؛ اتصال یا مجوز میکروفون دستگاه را بررسی کنید.";
+  }
+  if (errorCode === "network") {
+    return "سرویس تبدیل گفتار در دسترس نیست؛ اتصال اینترنت را بررسی یا از میکروفون Gboard استفاده کنید.";
+  }
+  if (errorCode === "language-not-supported") {
+    return "Dictation فارسی در این مرورگر دردسترس نیست؛ از میکروفون Gboard استفاده کنید.";
+  }
+  return `Dictation متوقف شد: ${errorCode || "خطای ناشناخته"}`;
+}
+
 function toggleDictation() {
   if (state.dictationRecognition) {
     stopDictation();
@@ -1172,12 +1191,9 @@ function toggleDictation() {
   recognition.onerror = (event) => {
     if (!["aborted", "no-speech"].includes(event.error)) {
       const permission = event.error === "not-allowed" || event.error === "service-not-allowed";
-      toast(
-        permission
-          ? "اجازهٔ میکروفون برای Dictation داده نشد."
-          : `Dictation متوقف شد: ${event.error || "خطای ناشناخته"}`,
-        "error",
-      );
+      toast(dictationErrorMessage(event.error), permission ? "warning" : "error", {
+        duration: 8000,
+      });
     }
   };
   recognition.onend = () => {
@@ -2461,7 +2477,7 @@ function createAssistantMessageActions() {
   actions.className = "message-actions";
   actions.setAttribute("aria-label", "کارهای پاسخ");
   actions.innerHTML = `
-    <button class="message-action" type="button" data-message-action="copy" title="کپی پاسخ" aria-label="کپی پاسخ">
+    <button class="message-action" type="button" data-message-action="copy" title="کپی Markdown" aria-label="کپی پاسخ به‌صورت Markdown">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
       <span>کپی</span>
     </button>

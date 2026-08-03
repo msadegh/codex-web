@@ -1064,7 +1064,11 @@ test(
           id: "actions-turn",
           status: "completed",
           items: [
-            { id: "assistant-actions", type: "agentMessage", text: "خط اول\nخط دوم" },
+            {
+              id: "assistant-actions",
+              type: "agentMessage",
+              text: "## عنوان\n\n- مورد اول\n- مورد دوم",
+            },
           ],
         },
       ],
@@ -1098,10 +1102,29 @@ test(
       () => document.querySelector("[data-item-id='assistant-actions']"),
       "assistant action response was not rendered",
     );
+    let copied = "";
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        async writeText(value) {
+          copied = value;
+        },
+      },
+    });
+    const copy = document.querySelector(
+      "[data-item-id='assistant-actions'] [data-message-action='copy']",
+    );
+    assert.equal(copy.title, "کپی Markdown");
+    copy.click();
+    await waitFor(() => copied, "Markdown response was not copied");
+    assert.equal(copied, "## عنوان\n\n- مورد اول\n- مورد دوم");
     document
       .querySelector("[data-item-id='assistant-actions'] [data-message-action='quote']")
       .click();
-    assert.equal(document.querySelector("#prompt").value, "> خط اول\n> خط دوم\n\n");
+    assert.equal(
+      document.querySelector("#prompt").value,
+      "> ## عنوان\n> \n> - مورد اول\n> - مورد دوم\n\n",
+    );
 
     document.querySelector("#open-settings").click();
     assert.equal(document.querySelector("input[name='accent-palette']"), null);
@@ -1293,6 +1316,14 @@ test(
     document.querySelector("#dictate").click();
     assert.equal(document.querySelector("#dictate").classList.contains("active"), false);
     assert.equal(document.querySelector("#record-voice"), null);
+    Object.defineProperty(window, "isSecureContext", {
+      configurable: true,
+      value: false,
+    });
+    document.querySelector("#dictate").click();
+    FakeSpeechRecognition.latest.onerror({ error: "not-allowed" });
+    assert.match(document.querySelector("#toasts .toast").textContent, /Gboard/);
+    document.querySelector("#dictate").click();
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );

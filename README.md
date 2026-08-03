@@ -308,7 +308,9 @@ monitor disk usage.
 The microphone button uses the browser's speech-recognition support to place a
 dictated transcript in the composer for review before sending. Availability and
 whether speech is processed locally or by a browser service depend on the
-browser. Dictation requires microphone permission.
+browser. Dictation requires microphone permission. On Android remote access, if
+Chrome blocks the in-page button, focus the composer and use Gboard's microphone;
+it produces the same editable, queueable prompt text.
 
 The up/down buttons in the conversation header jump between your messages.
 Completion audio requires one click or key press on the page before browsers
