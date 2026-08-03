@@ -85,6 +85,30 @@ test("keeps purely English message blocks left-to-right", () => {
   assert.equal(root.querySelector("li").getAttribute("dir"), "ltr");
 });
 
+test("renders structured answers with semantic section and list hierarchy", () => {
+  const root = render(`## پیشنهاد اصلی
+
+یک مقدمهٔ کوتاه.
+
+### مزایا
+
+- اتصال خصوصی
+- راه‌اندازی ساده
+- دسترسی موبایل
+
+### مراحل
+
+1. نصب برنامه
+2. بازکردن آدرس`);
+
+  assert.equal(root.querySelector("h2").textContent, "پیشنهاد اصلی");
+  assert.equal(root.querySelectorAll("h3").length, 2);
+  assert.equal(root.querySelectorAll("ul > li").length, 3);
+  assert.equal(root.querySelectorAll("ol > li").length, 2);
+  assert.equal(root.querySelector("ul").getAttribute("dir"), "rtl");
+  assert.equal(root.querySelector("ol").getAttribute("dir"), "rtl");
+});
+
 test("escapes table HTML and rejects unsafe links", () => {
   const root = render(`| ورودی | پیوند |
 | --- | --- |

@@ -30,14 +30,16 @@ many terminals.
 - Streams answers, tool activity, plans, file changes, and command output.
 - Supports native Codex Plan mode and persistent Goal mode, including goal
   pause, resume, edit, clear, and progress state.
-- Offers browser dictation plus recorded voice messages sent to Codex as
-  structured local-audio input.
-- Guides regular Codex turns toward scan-friendly answers while preserving the
-  existing Codex Web visual theme.
+- Offers browser dictation that turns speech into editable prompt text.
+- Adaptively structures multi-part Codex answers with semantic Markdown
+  headings and real lists while keeping simple answers compact and preserving
+  the existing Codex Web visual theme.
 - Uploads multiple images or accepts pasted screenshots and inserts their
   server-side paths into the prompt.
 - Queues follow-up prompts while a turn is running and can quote a selected
   part of an assistant response back into the composer.
+- Lets you collapse the conversation-history sidebar and remembers that simple
+  workspace preference.
 - Jumps between your own messages, keeps long streams readable, and offers a
   one-click jump to the bottom.
 - Plays one completion sound for foreground and background conversations.
@@ -286,7 +288,7 @@ conflict even though their conversation state is isolated.
 Multiple browser tabs may connect to the same server. Completion audio is
 deduplicated across tabs.
 
-## Images, voice, navigation, and completion alerts
+## Images, dictation, navigation, and completion alerts
 
 Use the image button to select up to 20 images, or paste a screenshot directly
 into the composer. PNG, JPEG, WebP, GIF, AVIF, and BMP images up to 25 MiB each
@@ -299,17 +301,16 @@ prompt. During remote use, images selected on your laptop or phone are uploaded
 through the SSH tunnel to the server.
 
 Uploads remain in the cache so old conversation paths continue to work. Review
-and remove unused sensitive images and voice recordings manually. There is no
+and remove unused sensitive images manually. There is no
 automatic cleanup or total cache quota, so long-running installations should
 monitor disk usage.
 
 The microphone button uses the browser's speech-recognition support to place a
 dictated transcript in the composer for review before sending. Availability and
 whether speech is processed locally or by a browser service depend on the
-browser. The waveform button records a voice message for up to 10 minutes and
-25 MiB, uploads it to the same private server cache, and sends it to Codex as a
-structured `localAudio` input. Both features require microphone permission;
-recorded voice messages are currently Codex-only.
+browser. Dictation requires microphone permission. On Android remote access, if
+Chrome blocks the in-page button, focus the composer and use Gboard's microphone;
+it produces the same editable, queueable prompt text.
 
 The up/down buttons in the conversation header jump between your messages.
 Completion audio requires one click or key press on the page before browsers

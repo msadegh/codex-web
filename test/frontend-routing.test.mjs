@@ -553,7 +553,7 @@ test(
     assert.equal(finalUrl.hash, "#composer");
     assert.match(
       threadStarts[0].developerInstructions,
-      /short descriptive headings, bullet lists, or numbered steps/,
+      /Turn list-like prose into real lists/,
     );
   },
 );
@@ -703,6 +703,62 @@ test("feature UI preserves the original Codex Web theme and conversation dimensi
   assert.doesNotMatch(app, /applyPalette|ACCENT_PALETTES/);
 });
 
+test(
+  "sidebar toggle stays simple, accessible, and persistent",
+  { concurrency: false },
+  async (t) => {
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const { method } = JSON.parse(options.body);
+      if (method === "model/list" || method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    };
+
+    const { values, window } = await createHarness(t, {
+      fetchHandler,
+      savedSettings: {
+        cwd: "/workspace",
+        modelByProvider: { codex: "", claude: "" },
+        provider: "codex",
+        sidebarCollapsed: true,
+        version: 5,
+      },
+    });
+    const { document } = window;
+    const menu = document.querySelector("#menu-button");
+    const close = document.querySelector("#sidebar-close");
+    const sidebar = document.querySelector("#sidebar");
+
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), true);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "true");
+    assert.equal(sidebar.hasAttribute("inert"), true);
+    assert.equal(menu.getAttribute("aria-expanded"), "false");
+    assert.equal(document.querySelectorAll(".sidebar-toggle-icon").length, 2);
+
+    menu.click();
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), false);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "false");
+    assert.equal(sidebar.hasAttribute("inert"), false);
+    assert.equal(menu.getAttribute("aria-expanded"), "true");
+    assert.equal(JSON.parse(values.get("codex-web-settings")).sidebarCollapsed, false);
+
+    document.querySelector("#new-chat").click();
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), false);
+
+    close.click();
+    assert.equal(document.body.classList.contains("sidebar-collapsed"), true);
+    assert.equal(sidebar.getAttribute("aria-hidden"), "true");
+    assert.equal(JSON.parse(values.get("codex-web-settings")).sidebarCollapsed, true);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
 test("favicon and in-app marks use the new terminal logo in the original theme", async () => {
   const [index, icon, styles] = await Promise.all([
     readFile(INDEX, "utf8"),
@@ -729,16 +785,29 @@ test("composer redesign and neutral stop control retain the original theme", asy
   const stop = [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
     .map((match) => match.groups?.body || "")
     .join("\n");
+  const placeholder =
+    styles.match(/\.composer textarea:placeholder-shown\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
 
   assert.match(index, /class="context-chip-icon" data-icon="settings"/);
   assert.match(index, /id="stop-turn"[^>]*>[\s\S]*?<rect[^>]+rx="1\.5"/);
   assert.match(composer, /background:\s*#171b17/);
   assert.match(composer, /border-radius:\s*22px/);
   assert.doesNotMatch(composer, /violet|neon|#42e8ff|#9b6dff/);
+  assert.match(index, /id="composer-tools"[^>]*>[\s\S]*?<path d="M12 5v14M5 12h14"/);
+  assert.match(index, /<strong>Goal mode<\/strong>/);
+  assert.match(index, /<strong>Plan mode<\/strong>/);
+  assert.equal((index.match(/class="composer-tool-option-description"/g) || []).length, 2);
+  assert.doesNotMatch(index, /id="record-voice"|id="voice-recorder"/);
+  assert.match(
+    styles,
+    /\.composer-tool-option-description\s*\{[^}]*white-space:\s*nowrap/s,
+  );
   assert.match(stop, /color:\s*var\(--bg\)/);
   assert.match(stop, /background:\s*var\(--text\)/);
   assert.match(stop, /border-radius:\s*50%/);
   assert.doesNotMatch(stop, /danger|warning|#4b1728/);
+  assert.match(placeholder, /direction:\s*rtl/);
+  assert.match(placeholder, /text-align:\s*right/);
 });
 
 test(
@@ -995,7 +1064,11 @@ test(
           id: "actions-turn",
           status: "completed",
           items: [
-            { id: "assistant-actions", type: "agentMessage", text: "خط اول\nخط دوم" },
+            {
+              id: "assistant-actions",
+              type: "agentMessage",
+              text: "## عنوان\n\n- مورد اول\n- مورد دوم",
+            },
           ],
         },
       ],
@@ -1029,10 +1102,29 @@ test(
       () => document.querySelector("[data-item-id='assistant-actions']"),
       "assistant action response was not rendered",
     );
+    let copied = "";
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        async writeText(value) {
+          copied = value;
+        },
+      },
+    });
+    const copy = document.querySelector(
+      "[data-item-id='assistant-actions'] [data-message-action='copy']",
+    );
+    assert.equal(copy.title, "کپی Markdown");
+    copy.click();
+    await waitFor(() => copied, "Markdown response was not copied");
+    assert.equal(copied, "## عنوان\n\n- مورد اول\n- مورد دوم");
     document
       .querySelector("[data-item-id='assistant-actions'] [data-message-action='quote']")
       .click();
-    assert.equal(document.querySelector("#prompt").value, "> خط اول\n> خط دوم\n\n");
+    assert.equal(
+      document.querySelector("#prompt").value,
+      "> ## عنوان\n> \n> - مورد اول\n> - مورد دوم\n\n",
+    );
 
     document.querySelector("#open-settings").click();
     assert.equal(document.querySelector("input[name='accent-palette']"), null);
@@ -1130,7 +1222,7 @@ test(
     document.querySelector("#composer-tools").click();
     document.querySelector("#plan-mode-option").click();
     assert.equal(document.querySelector("#plan-mode-option").getAttribute("aria-checked"), "true");
-    assert.equal(document.querySelector("#composer-tool-label").textContent, "Plan");
+    assert.match(document.querySelector("#composer-tools").getAttribute("aria-label"), /Plan mode/);
 
     document.querySelector("#composer-tools").click();
     document.querySelector("#goal-mode-option").click();
@@ -1223,125 +1315,15 @@ test(
     );
     document.querySelector("#dictate").click();
     assert.equal(document.querySelector("#dictate").classList.contains("active"), false);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  },
-);
-
-test(
-  "recorded voice uploads securely and starts a localAudio turn",
-  { concurrency: false },
-  async (t) => {
-    const turns = [];
-    let audioUploads = 0;
-    let threadListLoaded = false;
-    const thread = {
-      id: "voice-thread",
-      name: "Voice test",
-      cwd: "/workspace",
-      provider: "codex",
-      status: { type: "idle" },
-      turns: [],
-    };
-    const fetchHandler = async (path, options = {}) => {
-      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
-      if (path === "/api/uploads/audio") {
-        audioUploads += 1;
-        assert.equal(options.headers["Content-Type"], "audio/webm");
-        return jsonResponse({ path: "C:\\voice\\message.webm", type: "audio/webm" }, 201);
-      }
-      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
-      const request = JSON.parse(options.body);
-      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
-      if (request.method === "collaborationMode/list") return jsonResponse({ result: { data: [] } });
-      if (request.method === "thread/list") {
-        threadListLoaded = true;
-        return jsonResponse({ result: { data: [], nextCursor: null } });
-      }
-      if (request.method === "thread/start") return jsonResponse({ result: { thread } });
-      if (request.method === "thread/goal/get") return jsonResponse({ result: { goal: null } });
-      if (request.method === "turn/start") {
-        turns.push(request.params);
-        return jsonResponse({
-          result: {
-            turn: { id: "voice-turn", status: "inProgress", items: [], error: null },
-          },
-        });
-      }
-      throw new Error(`Unexpected RPC method: ${request.method}`);
-    };
-    const { window } = await createHarness(t, { fetchHandler });
-    let trackStopped = false;
-    let microphoneRequests = 0;
-    let recorderStarts = 0;
-    let recorderStops = 0;
-    const mediaDevices = {
-      async getUserMedia() {
-        microphoneRequests += 1;
-        return { getTracks: () => [{ stop: () => (trackStopped = true) }] };
-      },
-    };
-    Object.defineProperty(window.navigator, "mediaDevices", {
+    assert.equal(document.querySelector("#record-voice"), null);
+    Object.defineProperty(window, "isSecureContext", {
       configurable: true,
-      value: mediaDevices,
+      value: false,
     });
-    Object.defineProperty(globalThis.navigator, "mediaDevices", {
-      configurable: true,
-      value: mediaDevices,
-    });
-    class FakeMediaRecorder {
-      static isTypeSupported(type) {
-        return type.startsWith("audio/webm");
-      }
-      constructor(stream, options = {}) {
-        this.stream = stream;
-        this.mimeType = options.mimeType || "audio/webm";
-        this.state = "inactive";
-      }
-      start() {
-        recorderStarts += 1;
-        this.state = "recording";
-      }
-      stop() {
-        recorderStops += 1;
-        this.state = "inactive";
-        this.ondataavailable?.({
-          data: new Blob([Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3])], {
-            type: "audio/webm",
-          }),
-        });
-        this.onstop?.();
-      }
-    }
-    Object.defineProperty(window, "MediaRecorder", {
-      configurable: true,
-      value: FakeMediaRecorder,
-    });
-    assert.equal(window.MediaRecorder, FakeMediaRecorder);
-    const document = window.document;
-    await waitFor(() => threadListLoaded, "initial thread list was not loaded");
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    await waitFor(() => !document.querySelector("#record-voice").disabled, "voice button stayed disabled");
-    document
-      .querySelector("#record-voice")
-      .dispatchEvent(new window.Event("click", { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.equal(document.querySelector("#toasts").textContent.trim(), "");
-    assert.equal(microphoneRequests, 1);
-    assert.equal(recorderStarts, 1);
-    assert.equal(recorderStops, 0);
-    assert.equal(document.querySelector("#voice-recorder").className, "voice-recorder");
-    await waitFor(
-      () => !document.querySelector("#voice-recorder").classList.contains("hidden"),
-      "voice recorder did not open",
-    );
-    document.querySelector("#voice-send").click();
-    await waitFor(() => turns.length === 1, "voice turn was not started");
-    assert.equal(audioUploads, 1);
-    assert.deepEqual(turns[0].input, [
-      { type: "localAudio", path: "C:\\voice\\message.webm" },
-    ]);
-    assert.equal(trackStopped, true);
-    assert.match(document.querySelector(".message-row.user .message-content").textContent, /پیام صوتی/);
+    document.querySelector("#dictate").click();
+    FakeSpeechRecognition.latest.onerror({ error: "not-allowed" });
+    assert.match(document.querySelector("#toasts .toast").textContent, /Gboard/);
+    document.querySelector("#dictate").click();
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );

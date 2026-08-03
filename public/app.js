@@ -6,11 +6,9 @@ const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
 const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
-const MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024;
-const MAX_VOICE_RECORDING_MS = 10 * 60 * 1000;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const RESPONSE_STYLE_INSTRUCTIONS =
-  "Make final responses easy to scan. When useful, use short descriptive headings, bullet lists, or numbered steps. Keep simple answers simple, use compact paragraphs, and avoid unnecessary sections, repetitive summaries, or decorative formatting.";
+  "Make final responses adaptively structured and easy to scan. Lead with the direct answer or outcome. If a response contains multiple distinct parts, organize it with Markdown: use short descriptive ## headings for major sections, ### only for genuine subsections, bullets for three or more parallel items, options, or findings, and numbered lists only for ordered actions. Keep paragraphs to one to three sentences and use bold labels sparingly for scan points. Turn list-like prose into real lists. Keep simple answers as a short paragraph. Avoid # headings, deep nesting, decorative sections, redundant summaries, and tables unless a comparison is genuinely clearer.";
 const IMAGE_EXTENSIONS = {
   "image/avif": "avif",
   "image/bmp": "bmp",
@@ -19,15 +17,6 @@ const IMAGE_EXTENSIONS = {
   "image/png": "png",
   "image/webp": "webp",
 };
-const AUDIO_EXTENSIONS = {
-  "audio/mp4": "m4a",
-  "audio/mpeg": "mp3",
-  "audio/ogg": "ogg",
-  "audio/webm": "webm",
-  "audio/wav": "wav",
-  "audio/x-wav": "wav",
-};
-
 const SLASH_COMMANDS = [
   {
     name: "goal",
@@ -191,7 +180,6 @@ const elements = {
   approvalSelect: $("#approval-select"),
   connectionLabel: $("#connection-label"),
   composerHint: $("#composer-hint"),
-  composerToolLabel: $("#composer-tool-label"),
   composerTools: $("#composer-tools"),
   composerToolsMenu: $("#composer-tools-menu"),
   composerToolsNote: $("#composer-tools-note"),
@@ -246,7 +234,6 @@ const elements = {
   promptQueueClear: $("#prompt-queue-clear"),
   promptQueueCount: $("#prompt-queue-count"),
   promptQueueItems: $("#prompt-queue-items"),
-  recordVoice: $("#record-voice"),
   sandboxSelect: $("#sandbox-select"),
   saveSettings: $("#save-settings"),
   scrollBottom: $("#scroll-bottom"),
@@ -256,6 +243,7 @@ const elements = {
   settingsClose: $("#settings-close"),
   settingsDialog: $("#settings-dialog"),
   settingsForm: $("#settings-form"),
+  sidebar: $("#sidebar"),
   sidebarClose: $("#sidebar-close"),
   slashCommandEmpty: $("#slash-command-empty"),
   slashCommandMenu: $("#slash-command-menu"),
@@ -270,10 +258,6 @@ const elements = {
   toasts: $("#toasts"),
   uploadStatus: $("#upload-status"),
   userMessageNavigationStatus: $("#user-message-navigation-status"),
-  voiceCancel: $("#voice-cancel"),
-  voiceRecorder: $("#voice-recorder"),
-  voiceRecorderTimer: $("#voice-recorder-timer"),
-  voiceSend: $("#voice-send"),
   welcome: $("#welcome"),
   welcomeDescription: $("#welcome-description"),
   welcomeTitle: $("#welcome-title"),
@@ -288,13 +272,13 @@ const defaultSettings = {
   personality: "",
   provider: "codex",
   sandbox: "",
+  sidebarCollapsed: false,
 };
 
 const SETTINGS_VERSION = 5;
 
 const state = {
   activeInteractionKey: null,
-  audioUploading: false,
   busy: false,
   collaborationModes: [],
   completedTurns: new Set(),
@@ -356,14 +340,6 @@ const state = {
   userMessageHighlightTimer: null,
   userMessageNavigationFrame: null,
   userNavigationItemId: null,
-  voiceChunks: [],
-  voiceDiscard: false,
-  voiceElapsedTimer: null,
-  voiceMediaRecorder: null,
-  voiceRequestId: 0,
-  voiceStarting: false,
-  voiceStartedAt: 0,
-  voiceStream: null,
 };
 
 function loadSettings() {
@@ -382,6 +358,7 @@ function loadSettings() {
         savedSettings.claudePermissionMode || defaultSettings.claudePermissionMode,
       modelByProvider,
       provider: savedSettings.provider === "claude" ? "claude" : defaultSettings.provider,
+      sidebarCollapsed: savedSettings.sidebarCollapsed === true,
     };
   } catch {
     return { ...defaultSettings };
@@ -1155,6 +1132,25 @@ function stopDictation() {
   return true;
 }
 
+function dictationErrorMessage(errorCode) {
+  if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+    if (!window.isSecureContext) {
+      return "Chrome اجازهٔ Dictation را روی این آدرس نداد؛ از میکروفون Gboard داخل فیلد پیام استفاده کنید.";
+    }
+    return "اجازهٔ میکروفون برای Dictation داده نشد؛ دسترسی Microphone این سایت را فعال کنید.";
+  }
+  if (errorCode === "audio-capture") {
+    return "میکروفون در دسترس نیست؛ اتصال یا مجوز میکروفون دستگاه را بررسی کنید.";
+  }
+  if (errorCode === "network") {
+    return "سرویس تبدیل گفتار در دسترس نیست؛ اتصال اینترنت را بررسی یا از میکروفون Gboard استفاده کنید.";
+  }
+  if (errorCode === "language-not-supported") {
+    return "Dictation فارسی در این مرورگر دردسترس نیست؛ از میکروفون Gboard استفاده کنید.";
+  }
+  return `Dictation متوقف شد: ${errorCode || "خطای ناشناخته"}`;
+}
+
 function toggleDictation() {
   if (state.dictationRecognition) {
     stopDictation();
@@ -1167,11 +1163,6 @@ function toggleDictation() {
     });
     return;
   }
-  if (state.voiceMediaRecorder?.state === "recording") {
-    toast("ابتدا ضبط پیام صوتی را تمام کنید.", "warning");
-    return;
-  }
-
   const recognition = new SpeechRecognition();
   recognition.lang = "fa-IR";
   recognition.continuous = true;
@@ -1200,12 +1191,9 @@ function toggleDictation() {
   recognition.onerror = (event) => {
     if (!["aborted", "no-speech"].includes(event.error)) {
       const permission = event.error === "not-allowed" || event.error === "service-not-allowed";
-      toast(
-        permission
-          ? "اجازهٔ میکروفون برای Dictation داده نشد."
-          : `Dictation متوقف شد: ${event.error || "خطای ناشناخته"}`,
-        "error",
-      );
+      toast(dictationErrorMessage(event.error), permission ? "warning" : "error", {
+        duration: 8000,
+      });
     }
   };
   recognition.onend = () => {
@@ -1226,192 +1214,9 @@ function toggleDictation() {
   }
 }
 
-function preferredAudioMimeType() {
-  const MediaRecorderApi = window.MediaRecorder;
-  if (!MediaRecorderApi) return "";
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/ogg;codecs=opus",
-    "audio/mp4",
-  ];
-  return candidates.find((type) => MediaRecorderApi.isTypeSupported?.(type)) || "";
-}
-
-function formatVoiceTime(milliseconds) {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
-  return `${minutes}:${seconds}`;
-}
-
-function stopVoiceTracks() {
-  for (const track of state.voiceStream?.getTracks?.() || []) track.stop();
-  state.voiceStream = null;
-}
-
-async function uploadAudio(blob) {
-  const type = String(blob.type || "").split(";", 1)[0].toLowerCase();
-  if (!Object.hasOwn(AUDIO_EXTENSIONS, type)) {
-    throw new Error("فرمت صدای ضبط‌شده پشتیبانی نمی‌شود.");
-  }
-  if (!blob.size) throw new Error("صدای ضبط‌شده خالی است.");
-  if (blob.size > MAX_AUDIO_UPLOAD_BYTES) {
-    throw new Error("حجم پیام صوتی باید حداکثر ۲۵ مگابایت باشد.");
-  }
-  const name = `voice-${Date.now()}.${AUDIO_EXTENSIONS[type]}`;
-  const response = await fetch("/api/uploads/audio", {
-    method: "POST",
-    headers: {
-      "Content-Type": type,
-      "X-File-Name": encodeURIComponent(name),
-    },
-    body: blob,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  if (
-    typeof data.path !== "string" ||
-    (!data.path.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(data.path))
-  ) {
-    throw new Error("سرور مسیر معتبری برای صدا برنگرداند.");
-  }
-  return data.path;
-}
-
-async function sendVoiceBlob(blob) {
-  state.audioUploading = true;
-  updateComposerControls();
-  try {
-    const path = await uploadAudio(blob);
-    const sent = await sendPrompt("", {
-      input: [{ type: "localAudio", path }],
-    });
-    if (!sent) throw new Error("پیام صوتی در این لحظه قابل ارسال نیست.");
-  } catch (error) {
-    showError(error, "ارسال پیام صوتی");
-  } finally {
-    state.audioUploading = false;
-    updateComposerControls();
-  }
-}
-
-async function finishVoiceRecording(mimeType) {
-  const send = !state.voiceDiscard;
-  const chunks = state.voiceChunks;
-  state.voiceChunks = [];
-  state.voiceMediaRecorder = null;
-  state.voiceDiscard = false;
-  clearInterval(state.voiceElapsedTimer);
-  state.voiceElapsedTimer = null;
-  stopVoiceTracks();
-  elements.voiceRecorder.classList.add("hidden");
-  elements.voiceRecorderTimer.textContent = "00:00";
-  elements.recordVoice.classList.remove("active");
-  elements.recordVoice.setAttribute("aria-pressed", "false");
-  updateComposerControls();
-  if (!send) return;
-  const blob = new Blob(chunks, { type: mimeType || chunks[0]?.type || "audio/webm" });
-  await sendVoiceBlob(blob);
-}
-
-function stopVoiceRecording(send = true) {
-  const recorder = state.voiceMediaRecorder;
-  if (!recorder) {
-    if (!state.voiceStarting) return false;
-    state.voiceRequestId += 1;
-    state.voiceStarting = false;
-    updateComposerControls();
-    return true;
-  }
-  state.voiceDiscard = !send;
-  if (recorder.state !== "inactive") recorder.stop();
-  return true;
-}
-
-async function startVoiceRecording() {
-  if (effectiveProvider() !== "codex") {
-    toast("ارسال پیام صوتی فعلاً فقط برای Codex در دسترس است.", "warning");
-    return;
-  }
-  if (state.busy) {
-    toast("بعد از پایان پاسخ فعلی، ضبط پیام صوتی را شروع کنید.", "warning");
-    return;
-  }
-  if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
-    toast("مرورگر شما ضبط پیام صوتی را پشتیبانی نمی‌کند.", "warning");
-    return;
-  }
-  if (state.voiceMediaRecorder || state.voiceStarting) return;
-  stopDictation();
-  state.voiceStarting = true;
-  const requestId = ++state.voiceRequestId;
-  updateComposerControls();
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    if (
-      requestId !== state.voiceRequestId ||
-      state.navigating ||
-      effectiveProvider() !== "codex"
-    ) {
-      for (const track of stream.getTracks?.() || []) track.stop();
-      return;
-    }
-    state.voiceStream = stream;
-    const mimeType = preferredAudioMimeType();
-    const recorder = new window.MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    state.voiceMediaRecorder = recorder;
-    state.voiceChunks = [];
-    state.voiceDiscard = false;
-    state.voiceStartedAt = Date.now();
-    recorder.ondataavailable = (event) => {
-      if (event.data?.size) state.voiceChunks.push(event.data);
-    };
-    recorder.onerror = (event) => {
-      toast(`ضبط صدا متوقف شد: ${event.error?.message || "خطای ناشناخته"}`, "error");
-      stopVoiceRecording(false);
-    };
-    recorder.onstop = () => void finishVoiceRecording(recorder.mimeType || mimeType);
-    recorder.start(250);
-    elements.voiceRecorder.classList.remove("hidden");
-    elements.recordVoice.classList.add("active");
-    elements.recordVoice.setAttribute("aria-pressed", "true");
-    elements.voiceRecorderTimer.textContent = "00:00";
-    clearInterval(state.voiceElapsedTimer);
-    state.voiceElapsedTimer = setInterval(() => {
-      const elapsed = Date.now() - state.voiceStartedAt;
-      elements.voiceRecorderTimer.textContent = formatVoiceTime(elapsed);
-      if (elapsed >= MAX_VOICE_RECORDING_MS) {
-        toast("سقف ۱۰ دقیقه‌ای ضبط رسید؛ پیام در حال ارسال است.", "warning");
-        stopVoiceRecording(true);
-      }
-    }, 250);
-    updateComposerControls();
-  } catch (error) {
-    if (requestId !== state.voiceRequestId) return;
-    state.voiceMediaRecorder = null;
-    state.voiceChunks = [];
-    stopVoiceTracks();
-    elements.voiceRecorder.classList.add("hidden");
-    elements.recordVoice.classList.remove("active");
-    elements.recordVoice.setAttribute("aria-pressed", "false");
-    const denied = error?.name === "NotAllowedError" || error?.name === "SecurityError";
-    toast(
-      denied ? "اجازهٔ دسترسی به میکروفون داده نشد." : `شروع ضبط ممکن نبود: ${error.message}`,
-      "error",
-      { duration: 7000 },
-    );
-  } finally {
-    if (requestId === state.voiceRequestId) state.voiceStarting = false;
-    updateComposerControls();
-  }
-}
-
 function updateComposerControls() {
   const uploadingImages = imageUploadsForDraft();
-  const uploading = uploadingImages > 0 || state.audioUploading;
-  const recording = state.voiceMediaRecorder?.state === "recording";
+  const uploading = uploadingImages > 0;
   const text = elements.prompt.value.trim();
   const slash = parseSlashCommand(elements.prompt.value);
   const slashCanRun =
@@ -1422,7 +1227,7 @@ function updateComposerControls() {
   const queueMode = state.busy && !slash;
   elements.sendMessage.disabled = slash
     ? !slashCanRun
-    : !state.connected || state.navigating || uploading || recording || !text;
+    : !state.connected || state.navigating || uploading || !text;
   elements.sendMessage.classList.toggle("queue-mode", queueMode);
   elements.sendMessage.setAttribute(
     "aria-label",
@@ -1434,20 +1239,11 @@ function updateComposerControls() {
     : "Enter برای ارسال · Shift+Enter برای خط جدید";
   elements.addImages.disabled = state.navigating || uploading;
   elements.imageInput.disabled = state.navigating || uploading;
-  elements.composerTools.disabled = state.navigating || recording;
-  elements.dictate.disabled = state.navigating || recording;
-  elements.recordVoice.disabled =
-    !state.connected ||
-    state.navigating ||
-    uploading ||
-    state.voiceStarting ||
-    state.busy ||
-    effectiveProvider() !== "codex";
-  elements.uploadStatus.textContent = state.audioUploading
-    ? "در حال ارسال صدا…"
-    : uploadingImages > 1
-      ? `در حال افزودن ${uploadingImages.toLocaleString("fa-IR")} تصویر…`
-      : "در حال افزودن تصویر…";
+  elements.composerTools.disabled = state.navigating;
+  elements.dictate.disabled = state.navigating;
+  elements.uploadStatus.textContent = uploadingImages > 1
+    ? `در حال افزودن ${uploadingImages.toLocaleString("fa-IR")} تصویر…`
+    : "در حال افزودن تصویر…";
   elements.uploadStatus.classList.toggle("hidden", !uploading);
   updateComposerModeUi();
   updateSlashCommandMenu();
@@ -1542,7 +1338,6 @@ function setNavigating(navigating) {
     closeSlashCommandMenu();
     closeComposerToolsMenu();
     stopDictation();
-    stopVoiceRecording(false);
   }
   elements.prompt.disabled = navigating;
   updateConnection();
@@ -1645,6 +1440,7 @@ function saveSettings() {
     personality: elements.personalitySelect.value,
     provider,
     sandbox: elements.sandboxSelect.value,
+    sidebarCollapsed: state.settings.sidebarCollapsed,
   };
   persistSettings();
   state.models = state.modelsByProvider[provider] || [];
@@ -2039,14 +1835,15 @@ function updateComposerModeUi() {
   elements.planModeOption.setAttribute("aria-checked", String(plan));
   elements.composerToolsNote.classList.toggle("hidden", codex);
   elements.composerTools.classList.toggle("active-mode", Boolean(plan || goal));
-  elements.composerToolLabel.textContent = plan ? "Plan" : goal ? "Goal" : "ابزارها";
-  elements.composerTools.title = !codex
+  const toolLabel = !codex
     ? "Plan و Goal فقط برای Codex در دسترس‌اند"
     : plan
-      ? "Plan mode روشن است"
+      ? "ابزارهای گفتگو؛ Plan mode روشن است"
       : goal
-        ? "Goal فعال است"
-        : "حالت‌ها و هدف";
+        ? "ابزارهای گفتگو؛ Goal فعال است"
+        : "ابزارهای گفتگو";
+  elements.composerTools.setAttribute("aria-label", toolLabel);
+  elements.composerTools.title = toolLabel;
 }
 
 function toggleComposerToolsMenu() {
@@ -2601,7 +2398,6 @@ function newChat({ draftId = null, historyMode = "push" } = {}) {
   }
   saveCurrentDraft();
   stopDictation();
-  stopVoiceRecording(false);
   state.navigationVersion += 1;
   closeInteractionDialogs();
   state.openingThreadId = null;
@@ -2681,7 +2477,7 @@ function createAssistantMessageActions() {
   actions.className = "message-actions";
   actions.setAttribute("aria-label", "کارهای پاسخ");
   actions.innerHTML = `
-    <button class="message-action" type="button" data-message-action="copy" title="کپی پاسخ" aria-label="کپی پاسخ">
+    <button class="message-action" type="button" data-message-action="copy" title="کپی Markdown" aria-label="کپی پاسخ به‌صورت Markdown">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
       <span>کپی</span>
     </button>
@@ -3451,23 +3247,17 @@ function turnEventKey(threadId, turnId) {
 
 async function sendPrompt(
   text = elements.prompt.value,
-  { fromQueue = false, input: providedInput = null } = {},
+  { fromQueue = false } = {},
 ) {
-  const structuredInput =
-    Array.isArray(providedInput) && providedInput.length ? providedInput : null;
-  if (!structuredInput && parseSlashCommand(text)) {
+  if (parseSlashCommand(text)) {
     return Boolean(await handleSlashCommand(text));
   }
   text = String(text || "").trim();
-  const input = structuredInput || (text ? [{ type: "text", text }] : []);
+  const input = text ? [{ type: "text", text }] : [];
   if (!input.length || !state.connected || state.navigating || imageUploadsForDraft() > 0) {
     return false;
   }
   if (state.busy) {
-    if (structuredInput) {
-      toast("پیام صوتی را بعد از پایان پاسخ فعلی بفرستید.", "warning");
-      return false;
-    }
     if (fromQueue) return false;
     enqueuePrompt(text);
     return true;
@@ -3477,7 +3267,7 @@ async function sendPrompt(
   const navigationVersion = state.navigationVersion;
   let targetThreadId = sourceThreadId;
   const clientUserMessageId = crypto.randomUUID();
-  if (!fromQueue && !structuredInput) {
+  if (!fromQueue) {
     elements.prompt.value = "";
     state.drafts.set(sourceDraftKey, "");
     resizePrompt();
@@ -3556,7 +3346,7 @@ async function sendPrompt(
     if (shouldRollback) {
       const restoreThreadId = targetThreadId || sourceThreadId;
       const restoreKey = restoreThreadId ? draftKey(restoreThreadId) : sourceDraftKey;
-      if (!fromQueue && !structuredInput) {
+      if (!fromQueue) {
         const newerDraft = state.drafts.get(restoreKey) || "";
         state.drafts.set(restoreKey, newerDraft ? `${text}\n\n${newerDraft}` : text);
       }
@@ -3575,7 +3365,7 @@ async function sendPrompt(
         (!restoreThreadId && draftKey() === sourceDraftKey)
       ) {
         setBusy(false);
-        if (!fromQueue && !structuredInput) restoreDraft(restoreThreadId);
+        if (!fromQueue) restoreDraft(restoreThreadId);
       }
     }
     showError(error, "ارسال پیام");
@@ -4575,12 +4365,49 @@ function resizePrompt() {
   updateComposerControls();
 }
 
+function sidebarUsesOverlay() {
+  return window.matchMedia?.("(max-width: 820px)").matches ?? false;
+}
+
+function updateSidebarUi() {
+  const overlay = sidebarUsesOverlay();
+  const open = overlay
+    ? document.body.classList.contains("sidebar-open")
+    : !state.settings.sidebarCollapsed;
+  document.body.classList.toggle(
+    "sidebar-collapsed",
+    !overlay && state.settings.sidebarCollapsed,
+  );
+  elements.sidebar.setAttribute("aria-hidden", String(!open));
+  elements.sidebar.toggleAttribute("inert", !open);
+  elements.menuButton.setAttribute("aria-expanded", String(open));
+  elements.sidebarClose.setAttribute("aria-expanded", String(open));
+}
+
 function openSidebar() {
-  document.body.classList.add("sidebar-open");
+  if (sidebarUsesOverlay()) {
+    document.body.classList.add("sidebar-open");
+  } else if (state.settings.sidebarCollapsed) {
+    state.settings.sidebarCollapsed = false;
+    persistSettings();
+  }
+  updateSidebarUi();
 }
 
 function closeSidebar() {
   document.body.classList.remove("sidebar-open");
+  updateSidebarUi();
+}
+
+function collapseSidebar() {
+  if (sidebarUsesOverlay()) {
+    closeSidebar();
+  } else {
+    state.settings.sidebarCollapsed = true;
+    persistSettings();
+    updateSidebarUi();
+  }
+  elements.menuButton.focus();
 }
 
 let searchTimer;
@@ -4610,9 +4437,6 @@ elements.goalForm.addEventListener("submit", (event) => void saveGoalFromDialog(
 elements.goalDialogCancel.addEventListener("click", () => elements.goalDialog.close());
 elements.goalDialogClose.addEventListener("click", () => elements.goalDialog.close());
 elements.dictate.addEventListener("click", toggleDictation);
-elements.recordVoice.addEventListener("click", () => void startVoiceRecording());
-elements.voiceCancel.addEventListener("click", () => stopVoiceRecording(false));
-elements.voiceSend.addEventListener("click", () => stopVoiceRecording(true));
 elements.imageInput.addEventListener("change", () => {
   const files = [...elements.imageInput.files];
   const targetDraftKey = draftKey();
@@ -4756,7 +4580,7 @@ elements.sandboxSelect.addEventListener("change", () =>
   updateFullAccessWarning(elements.providerSelect.value),
 );
 elements.menuButton.addEventListener("click", openSidebar);
-elements.sidebarClose.addEventListener("click", closeSidebar);
+elements.sidebarClose.addEventListener("click", collapseSidebar);
 elements.mobileScrim.addEventListener("click", closeSidebar);
 elements.approvalAccept.addEventListener("click", () => answerInteraction("accept"));
 elements.approvalSession.addEventListener("click", () => answerInteraction("session"));
@@ -4811,6 +4635,7 @@ window.addEventListener(
   () => {
     hideSelectionAsk();
     scheduleUserMessageNavigationUpdate();
+    updateSidebarUi();
   },
   { passive: true },
 );
@@ -4876,6 +4701,7 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 });
 
 async function initialize() {
+  updateSidebarUi();
   updateSettingsUi();
   updateConnection();
   resizePrompt();

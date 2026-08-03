@@ -145,8 +145,26 @@ textarea:focus-visible {
   background: var(--panel-3);
 }
 
+.sidebar-toggle-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
 .sidebar-close {
+  display: grid;
+}
+
+body.sidebar-collapsed .sidebar {
   display: none;
+}
+
+body.sidebar-collapsed .menu-button {
+  display: grid;
 }
 
 .new-chat-button {
@@ -684,7 +702,7 @@ textarea:focus-visible {
 }
 
 .message-content h1 {
-  font-size: 1.35rem;
+  font-size: 1.375rem;
 }
 
 .message-content h2 {
@@ -1282,6 +1300,11 @@ textarea:focus-visible {
   color: var(--muted-2);
 }
 
+.composer textarea:placeholder-shown {
+  direction: rtl;
+  text-align: right;
+}
+
 .composer-footer {
   display: flex;
   min-height: 34px;
@@ -1331,6 +1354,8 @@ button.context-chip:hover {
 
 .send-button,
 .image-button,
+.composer-tool-button,
+.dictate-button,
 .stop-button {
   display: grid;
   width: 32px;
@@ -1341,22 +1366,32 @@ button.context-chip:hover {
   font-family: system-ui, sans-serif;
 }
 
-.image-button {
+.image-button,
+.composer-tool-button,
+.dictate-button {
   color: var(--muted);
   background: transparent;
 }
 
-.image-button:hover {
+.image-button:hover,
+.composer-tool-button:hover,
+.dictate-button:hover,
+.composer-tool-button[aria-expanded="true"],
+.dictate-button.active {
   color: var(--text);
   background: var(--panel-3);
 }
 
-.image-button:disabled {
+.image-button:disabled,
+.composer-tool-button:disabled,
+.dictate-button:disabled {
   cursor: wait;
   opacity: 0.45;
 }
 
-.image-button svg {
+.image-button svg,
+.composer-tool-button svg,
+.dictate-button svg {
   width: 18px;
   height: 18px;
   fill: none;
@@ -1364,6 +1399,21 @@ button.context-chip:hover {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.7;
+}
+
+.composer-tool-button {
+  width: 34px;
+}
+
+.composer-tool-button.active-mode {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.dictate-button.active {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  box-shadow: 0 0 15px rgb(var(--accent-rgb) / 0.14);
 }
 
 .upload-status {
@@ -1847,7 +1897,6 @@ dialog form,
     transform: translateX(0);
   }
 
-  .sidebar-close,
   .menu-button {
     display: grid;
   }
@@ -1934,6 +1983,30 @@ dialog form,
   .composer-wrap {
     padding-bottom: 6px;
   }
+
+  .prompt-queue-items {
+    max-height: 104px;
+  }
+
+  .prompt-queue-preview {
+    font-size: 0.71875rem;
+  }
+
+  .composer-tools-menu {
+    inset-inline: 5px;
+    bottom: 56px;
+    width: auto;
+  }
+
+  .goal-progress {
+    grid-template-columns: 29px minmax(0, 1fr) auto;
+    padding-inline: 7px;
+  }
+
+  .goal-actions button {
+    width: 26px;
+  }
+
 
   .composer-hint {
     display: none;
@@ -2080,8 +2153,7 @@ dialog form,
 }
 
 .prompt-queue,
-.goal-progress,
-.voice-recorder {
+.goal-progress {
   margin: -1px 1px 7px;
   background: rgb(18 21 18 / 0.82);
   border: 1px solid var(--line);
@@ -2289,24 +2361,31 @@ dialog form,
   stroke-width: 1.6;
 }
 
-.composer-tool-option-copy {
-  display: grid;
+.composer-tool-option-text {
+  display: flex;
   min-width: 0;
-  gap: 2px;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
 }
 
-.composer-tool-option-copy strong {
-  font-size: 0.8rem;
+.composer-tool-option-text strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 650;
   direction: ltr;
-  text-align: right;
   unicode-bidi: isolate;
 }
 
-.composer-tool-option-copy small {
-  overflow-wrap: anywhere;
+.composer-tool-option-description {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted-2);
-  font-size: 0.68rem;
+  font-size: 0.74rem;
   line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mode-switch {
@@ -2407,108 +2486,6 @@ dialog form,
   direction: rtl;
 }
 
-.voice-recorder {
-  display: flex;
-  min-height: 52px;
-  padding: 7px 8px;
-  align-items: center;
-  gap: 9px;
-  color: var(--muted);
-  border-color: rgb(216 255 107 / 0.2);
-}
-
-.recording-dot {
-  width: 9px;
-  height: 9px;
-  flex: 0 0 auto;
-  background: var(--accent);
-  border-radius: 50%;
-  box-shadow: 0 0 12px rgb(216 255 107 / 0.38);
-  animation: recording-pulse 1.2s ease-in-out infinite;
-}
-
-.voice-recorder-copy {
-  display: flex;
-  min-width: 125px;
-  flex-direction: column;
-  gap: 1px;
-  font-size: 0.62rem;
-}
-
-.voice-recorder-copy strong {
-  color: var(--muted);
-  font-size: 0.68rem;
-}
-
-.voice-recorder-wave {
-  display: flex;
-  min-width: 54px;
-  flex: 1 1 auto;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-}
-
-.voice-recorder-wave i {
-  width: 2px;
-  height: 16px;
-  background: var(--accent);
-  border-radius: 999px;
-  animation: voice-wave 0.9s ease-in-out infinite alternate;
-}
-
-.voice-recorder-wave i:nth-child(2),
-.voice-recorder-wave i:nth-child(4) {
-  animation-delay: -0.45s;
-}
-
-.voice-recorder-wave i:nth-child(3) {
-  height: 25px;
-  animation-delay: -0.2s;
-}
-
-.voice-cancel-button {
-  padding: 6px 8px;
-  color: var(--muted);
-  background: transparent;
-  border-radius: 7px;
-  font-size: 0.68rem;
-}
-
-.voice-cancel-button:hover {
-  color: var(--text);
-  background: var(--panel-3);
-}
-
-.voice-send-button {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  place-items: center;
-  color: var(--accent-ink);
-  background: var(--accent);
-  border-radius: 50%;
-}
-
-.voice-send-button svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2.1;
-}
-
-@keyframes recording-pulse {
-  50% { opacity: 0.48; }
-}
-
-@keyframes voice-wave {
-  to { transform: scaleY(0.35); }
-}
-
 .context-chip-icon {
   width: 16px;
   height: 16px;
@@ -2523,7 +2500,7 @@ dialog form,
 .send-button,
 .image-button,
 .composer-tool-button,
-.voice-action-button,
+.dictate-button,
 .stop-button {
   width: 34px;
   height: 34px;
@@ -2531,29 +2508,29 @@ dialog form,
 
 .image-button,
 .composer-tool-button,
-.voice-action-button {
+.dictate-button {
   color: var(--muted);
   background: transparent;
 }
 
 .image-button:hover,
 .composer-tool-button:hover,
-.voice-action-button:hover,
+.dictate-button:hover,
 .composer-tool-button[aria-expanded="true"],
-.voice-action-button.active {
+.dictate-button.active {
   color: var(--text);
   background: var(--panel-3);
 }
 
 .image-button:disabled,
 .composer-tool-button:disabled,
-.voice-action-button:disabled {
+.dictate-button:disabled {
   cursor: wait;
   opacity: 0.45;
 }
 
 .composer-tool-button,
-.voice-action-button {
+.dictate-button {
   display: grid;
   padding: 0;
   place-items: center;
@@ -2561,7 +2538,7 @@ dialog form,
 }
 
 .composer-tool-button svg,
-.voice-action-button svg {
+.dictate-button svg {
   width: 18px;
   height: 18px;
   fill: none;
@@ -2572,25 +2549,17 @@ dialog form,
 }
 
 .composer-tool-button {
-  display: flex;
-  width: auto;
-  min-width: 34px;
-  padding: 0 8px;
-  gap: 5px;
+  display: grid;
+  width: 34px;
+  min-width: 0;
+  padding: 0;
+  gap: 0;
 }
 
 .composer-tool-button.active-mode,
-.voice-action-button.active {
+.dictate-button.active {
   color: var(--accent-strong);
   background: rgb(216 255 107 / 0.08);
-}
-
-.composer-tool-label {
-  max-width: 70px;
-  overflow: hidden;
-  font-size: 0.62rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .send-button {
@@ -2682,13 +2651,6 @@ dialog form,
     justify-content: flex-end;
   }
 
-  .voice-recorder-copy strong {
-    display: none;
-  }
-
-  .voice-recorder-copy {
-    min-width: auto;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -150,6 +150,7 @@ export function markdown(source) {
   const output = [];
   let paragraph = [];
   let list = null;
+  let listDirection = "";
   let inFence = false;
   let fenceLanguage = "";
   let fenceLines = [];
@@ -165,14 +166,16 @@ export function markdown(source) {
     if (!list) return;
     output.push(`</${list}>`);
     list = null;
+    listDirection = "";
   };
 
-  const openList = (kind) => {
+  const openList = (kind, direction) => {
     flushParagraph();
-    if (list === kind) return;
+    if (list === kind && listDirection === direction) return;
     closeList();
     list = kind;
-    output.push(`<${kind}>`);
+    listDirection = direction;
+    output.push(`<${kind} dir="${direction}">`);
   };
 
   const flushFence = () => {
@@ -234,15 +237,17 @@ export function markdown(source) {
 
     const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
     if (bullet) {
-      openList("ul");
-      output.push(`<li dir="${blockDirection(bullet[1])}">${inlineMarkdown(bullet[1])}</li>`);
+      const direction = blockDirection(bullet[1]);
+      openList("ul", direction);
+      output.push(`<li dir="${direction}">${inlineMarkdown(bullet[1])}</li>`);
       continue;
     }
 
     const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (ordered) {
-      openList("ol");
-      output.push(`<li dir="${blockDirection(ordered[1])}">${inlineMarkdown(ordered[1])}</li>`);
+      const direction = blockDirection(ordered[1]);
+      openList("ol", direction);
+      output.push(`<li dir="${direction}">${inlineMarkdown(ordered[1])}</li>`);
       continue;
     }
 

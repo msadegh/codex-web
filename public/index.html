@@ -26,7 +26,20 @@
             <strong>Codex Web</strong>
             <span>روی همین دستگاه</span>
           </div>
-          <button class="icon-button sidebar-close" id="sidebar-close" aria-label="بستن فهرست">×</button>
+          <button
+            class="icon-button sidebar-close"
+            id="sidebar-close"
+            type="button"
+            aria-label="بستن نوار گفتگوها"
+            aria-controls="sidebar"
+            aria-expanded="true"
+            title="بستن نوار گفتگوها"
+          >
+            <svg class="sidebar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <path d="M15 4v16" />
+            </svg>
+          </button>
         </div>
 
         <button class="new-chat-button" id="new-chat">
@@ -52,7 +65,20 @@
 
       <main class="main-panel">
         <header class="topbar">
-          <button class="icon-button menu-button" id="menu-button" aria-label="نمایش گفتگوها">☰</button>
+          <button
+            class="icon-button menu-button"
+            id="menu-button"
+            type="button"
+            aria-label="بازکردن نوار گفتگوها"
+            aria-controls="sidebar"
+            aria-expanded="false"
+            title="بازکردن نوار گفتگوها"
+          >
+            <svg class="sidebar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <path d="M15 4v16" />
+            </svg>
+          </button>
           <div class="thread-heading">
             <h1 id="thread-title">گفتگوی تازه</h1>
             <div class="thread-meta" id="thread-meta" dir="ltr"></div>
@@ -137,9 +163,15 @@
               class="composer-tools-menu hidden"
               id="composer-tools-menu"
               role="menu"
-              aria-label="حالت‌های گفتگو"
+              aria-label="ابزارهای گفتگو"
             >
-              <button class="composer-tool-option" id="goal-mode-option" type="button" role="menuitem">
+              <button
+                class="composer-tool-option"
+                id="goal-mode-option"
+                type="button"
+                role="menuitem"
+                aria-label="Goal؛ تعیین هدف ماندگار"
+              >
                 <span class="composer-tool-option-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24">
                     <circle cx="12" cy="12" r="8" />
@@ -147,9 +179,9 @@
                     <path d="M16.5 7.5 21 3m0 0v4m0-4h-4" />
                   </svg>
                 </span>
-                <span class="composer-tool-option-copy">
-                  <strong>Goal</strong>
-                  <small>یک هدف تعیین کن تا Codex پیگیرش بماند</small>
+                <span class="composer-tool-option-text">
+                  <strong>Goal mode</strong>
+                  <span class="composer-tool-option-description">هدف ماندگار برای Codex</span>
                 </span>
               </button>
               <button
@@ -158,6 +190,7 @@
                 type="button"
                 role="menuitemcheckbox"
                 aria-checked="false"
+                aria-label="Plan mode؛ بررسی و برنامه‌ریزی قبل از اجرا"
               >
                 <span class="composer-tool-option-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24">
@@ -166,9 +199,9 @@
                     <path d="M4 12H2m20 0h-2M5 5 3.6 3.6M19 5l1.4-1.4" />
                   </svg>
                 </span>
-                <span class="composer-tool-option-copy">
+                <span class="composer-tool-option-text">
                   <strong>Plan mode</strong>
-                  <small>قبل از اجرا، مسئله را بررسی و برنامه‌ریزی کن</small>
+                  <span class="composer-tool-option-description">برنامه‌ریزی پیش از اجرا</span>
                 </span>
                 <span class="mode-switch" aria-hidden="true"><span></span></span>
               </button>
@@ -249,20 +282,6 @@
                 </button>
               </span>
             </section>
-            <section class="voice-recorder hidden" id="voice-recorder" aria-live="polite">
-              <span class="recording-dot" aria-hidden="true"></span>
-              <span class="voice-recorder-copy">
-                <strong>در حال ضبط پیام صوتی</strong>
-                <span id="voice-recorder-timer" dir="ltr">00:00</span>
-              </span>
-              <span class="voice-recorder-wave" aria-hidden="true">
-                <i></i><i></i><i></i><i></i><i></i>
-              </span>
-              <button class="voice-cancel-button" id="voice-cancel" type="button">لغو</button>
-              <button class="voice-send-button" id="voice-send" type="button" aria-label="پایان ضبط و ارسال">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
-              </button>
-            </section>
             <textarea
               id="prompt"
               rows="1"
@@ -300,16 +319,14 @@
                   class="composer-tool-button"
                   id="composer-tools"
                   type="button"
-                  aria-label="حالت‌ها و هدف گفتگو"
+                  aria-label="ابزارهای گفتگو"
                   aria-controls="composer-tools-menu"
                   aria-expanded="false"
-                  title="حالت‌ها و هدف"
+                  title="ابزارهای گفتگو"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1" />
+                    <path d="M12 5v14M5 12h14" />
                   </svg>
-                  <span class="composer-tool-label" id="composer-tool-label">ابزارها</span>
                 </button>
                 <button
                   class="image-button"
@@ -325,7 +342,7 @@
                   </svg>
                 </button>
                 <button
-                  class="voice-action-button"
+                  class="dictate-button"
                   id="dictate"
                   type="button"
                   aria-label="دیکته؛ تبدیل گفتار به متن"
@@ -335,18 +352,6 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="9" y="3" width="6" height="11" rx="3" />
                     <path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4m-3 0h6" />
-                  </svg>
-                </button>
-                <button
-                  class="voice-action-button"
-                  id="record-voice"
-                  type="button"
-                  aria-label="ضبط پیام صوتی"
-                  aria-pressed="false"
-                  title="ضبط پیام صوتی"
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M4 13v-2m4 5V8m4 11V5m4 11V8m4 5v-2" />
                   </svg>
                 </button>
                 <button class="stop-button hidden" id="stop-turn" type="button" aria-label="توقف پاسخ" title="توقف پاسخ">
