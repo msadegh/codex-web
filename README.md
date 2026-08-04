@@ -36,8 +36,10 @@ many terminals.
   the existing Codex Web visual theme.
 - Uploads multiple images or accepts pasted screenshots and inserts their
   server-side paths into the prompt.
-- Queues follow-up prompts while a turn is running and can quote a selected
-  part of an assistant response back into the composer.
+- Queues follow-up text prompts while a turn is running, with edit, remove,
+  clear, and automatic FIFO dispatch controls.
+- Copies assistant responses as their original Markdown, quotes full answers,
+  and sends selected excerpts back to the composer with **Ask Codex**.
 - Lets you collapse the conversation-history sidebar and remembers that simple
   workspace preference.
 - Jumps between your own messages, keeps long streams readable, and offers a
@@ -243,6 +245,25 @@ a conversation causes Claude Code itself to append to its native history.
 Protect both directories because conversation history may contain source code,
 tool input/output, or other sensitive content.
 
+## Composer workflow and modes
+
+While a turn is running, the send button switches to queue mode. Each text
+prompt is added to the current conversation's visible queue, where it can be
+edited, removed, or cleared. Prompts are dispatched automatically in FIFO order
+after the active turn finishes; queues from different conversations do not mix.
+
+Every assistant response has **Copy** and **Quote** actions. Copy preserves the
+original Markdown; Quote inserts the full response as a Markdown blockquote.
+Selecting part of an assistant response reveals **Ask Codex**, which inserts
+only that excerpt as a quote in the composer so you can review or edit it before
+sending.
+
+The composer's `+` menu exposes Codex-only Plan and Goal modes. Plan mode asks
+Codex to investigate and plan before implementation and can also be toggled
+with `Shift+Tab` or `/plan`. Goal mode keeps a persistent objective for the
+conversation and exposes progress, pause/resume, edit, and clear controls. Both
+options are disabled for Claude conversations.
+
 ## Slash commands
 
 Type `/` in the composer to open the command menu, then keep typing to filter
@@ -305,16 +326,18 @@ and remove unused sensitive images manually. There is no
 automatic cleanup or total cache quota, so long-running installations should
 monitor disk usage.
 
-The microphone button uses the browser's speech-recognition support to place a
-dictated transcript in the composer for review before sending. Availability and
-whether speech is processed locally or by a browser service depend on the
-browser. Dictation requires microphone permission. On Android remote access, if
-Chrome blocks the in-page button, focus the composer and use Gboard's microphone;
-it produces the same editable, queueable prompt text.
+The microphone button—or `Ctrl+Shift+D`—uses the browser's speech-recognition
+support to place a dictated transcript in the composer for review before
+sending. Availability and whether speech is processed locally or by a browser
+service depend on the browser. Dictation requires microphone permission. On
+Android remote access, if Chrome blocks the in-page button, focus the composer
+and use Gboard's microphone; it produces the same editable, queueable prompt
+text.
 
-The up/down buttons in the conversation header jump between your messages.
-Completion audio requires one click or key press on the page before browsers
-allow sound.
+On desktop, the sidebar toggle collapses conversation history and remembers the
+preference; on mobile, the sidebar remains a temporary drawer. The up/down
+buttons in the conversation header jump between your messages. Completion
+audio requires one click or key press on the page before browsers allow sound.
 
 Opening a conversation stores its ID in the user-facing `?session=` URL.
 Refreshing the page or using browser Back and Forward restores that selection.
@@ -400,6 +423,7 @@ cd /path/to/codex-web
 git pull --ff-only
 npm install
 npm install --global .
+codex-web --version
 ```
 
 Update Codex CLI or Claude Code CLI as well if a provider protocol or output
@@ -442,6 +466,10 @@ it. Deleting `CLAUDE_CONFIG_DIR` affects Claude Code itself, not just Codex Web.
   rules; do not use `bypassPermissions` merely to hide a configuration error.
 - **The port is busy:** start with `CODEX_WEB_PORT=4180 codex-web` and use the
   matching local URL or SSH mapping.
+- **The old UI still opens after an update:** stop the already-running Codex
+  Web process, run `npm install --global .` from the updated checkout, confirm
+  the launcher with `command -v codex-web` and `codex-web --version`, then start
+  it again. Hard-refresh the browser if cached assets remain visible.
 - **Wrong working directory:** start Codex Web inside the target project, set
   `CODEX_WEB_CWD`, or change it in the settings dialog before starting a chat.
 - **The SSH tunnel disconnected:** reconnect it; the server-side process may
