@@ -1633,12 +1633,16 @@ test(
 
     document.querySelector("#usage-button").click();
     assert.equal(document.querySelector("#usage-dialog").open, true);
-    assert.match(document.querySelector("#usage-dialog").textContent, /دو معیار جدا/);
-    assert.match(document.querySelector("#usage-dialog").textContent, /سهمیهٔ حساب/);
+    assert.equal(document.querySelector("#usage-dialog h2").textContent, "مصرف");
+    assert.equal(document.querySelector("#usage-button span").textContent, "مصرف");
+    assert.match(document.querySelector("#usage-dialog").textContent, /مصرف حساب/);
     assert.match(document.querySelector("#usage-dialog").textContent, /Context گفت‌وگو/);
+    assert.match(document.querySelector("#context-usage-tooltip").textContent, /مستقل از محدودیت حساب/);
+    assert.match(document.querySelector("#account-usage-tooltip").textContent, /هر بازه جداگانه/);
     assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۵ ساعته/);
     assert.match(document.querySelector("#usage-dialog").textContent, /۸۲٪ استفاده · ۱۸٪ باقی/);
     assert.match(document.querySelector("#usage-dialog").textContent, /بازنشانی رایگان/);
+    assert.equal(document.querySelector("#usage-overview").classList.contains("hidden"), true);
 
     FakeEventSource.latest.emit("rpc", {
       method: "thread/tokenUsage/updated",
@@ -1659,7 +1663,7 @@ test(
     assert.equal(document.querySelector("#context-usage-percent").textContent, "۲۴٪ پر");
     assert.equal(
       document.querySelector("#context-usage-detail").textContent,
-      "۴۸٬۰۰۰ از ۲۰۰٬۰۰۰ توکن",
+      "۴۸٬۰۰۰ مصرف · ۱۵۲٬۰۰۰ باقی · سقف ۲۰۰٬۰۰۰ توکن",
     );
     assert.equal(
       document.querySelector("#context-usage-progress").getAttribute("aria-valuenow"),

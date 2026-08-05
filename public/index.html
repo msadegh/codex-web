@@ -144,10 +144,10 @@
               class="text-button usage-button"
               id="usage-button"
               type="button"
-              aria-label="نمایش سهمیهٔ حساب و Context گفت‌وگو"
-              title="سهمیهٔ حساب و Context گفت‌وگو"
+              aria-label="نمایش جزئیات مصرف"
+              title="نمایش جزئیات مصرف"
             >
-              <span>سهمیه</span>
+              <span>مصرف</span>
               <bdi id="usage-percent" dir="rtl">—</bdi>
             </button>
             <button class="text-button header-project-button" id="header-project" type="button">
@@ -647,17 +647,25 @@
     <dialog class="usage-dialog" id="usage-dialog">
       <div class="dialog-header">
         <div>
-          <span class="dialog-eyebrow usage-eyebrow">Usage</span>
-          <h2>سهمیه و Context</h2>
-          <p>سهمیهٔ حساب و حافظهٔ فعال گفت‌وگو، دو معیار جدا هستند.</p>
+          <h2>مصرف</h2>
         </div>
         <button class="icon-button" id="usage-close" type="button" aria-label="بستن">×</button>
       </div>
       <section class="usage-section context-usage-section" aria-labelledby="context-usage-title">
         <div class="usage-section-header">
-          <div>
+          <div class="usage-title-row">
             <h3 id="context-usage-title">Context گفت‌وگو</h3>
-            <p>حافظهٔ فعال همین گفت‌وگو؛ مستقل از سهمیهٔ حساب</p>
+            <span class="usage-help">
+              <button
+                class="usage-help-button"
+                type="button"
+                aria-label="توضیح مصرف Context"
+                aria-describedby="context-usage-tooltip"
+              >?</button>
+              <span class="usage-tooltip" id="context-usage-tooltip" role="tooltip">
+                توکن‌های فعال همین گفت‌وگو نسبت به سقف Context مدل؛ مستقل از محدودیت حساب.
+              </span>
+            </span>
           </div>
           <bdi class="context-usage-percent" id="context-usage-percent" dir="rtl">—</bdi>
         </div>
@@ -677,18 +685,25 @@
       </section>
       <section class="usage-section account-usage-section" aria-labelledby="account-usage-title">
         <div class="usage-section-header">
-          <div>
-            <h3 id="account-usage-title">سهمیهٔ حساب</h3>
-            <p>محدودیت زمانی حساب ChatGPT/Codex</p>
+          <div class="usage-title-row">
+            <h3 id="account-usage-title">مصرف حساب</h3>
+            <span class="usage-help">
+              <button
+                class="usage-help-button"
+                type="button"
+                aria-label="توضیح مصرف حساب"
+                aria-describedby="account-usage-tooltip"
+              >?</button>
+              <span class="usage-tooltip" id="account-usage-tooltip" role="tooltip">
+                محدودیت زمانی حساب ChatGPT/Codex است و هر بازه جداگانه بازنشانی می‌شود؛ ارائه‌دهنده‌های سفارشی ممکن است محدودیت دیگری داشته باشند.
+              </span>
+            </span>
           </div>
         </div>
         <p class="usage-overview" id="usage-overview">در حال دریافت اطلاعات حساب…</p>
         <div class="usage-limits" id="usage-limits" aria-live="polite"></div>
         <div class="usage-account-details hidden" id="usage-account-details"></div>
       </section>
-      <p class="usage-source-note">
-        ارائه‌دهنده‌های سفارشی ممکن است سهمیه و Context جداگانه‌ای گزارش کنند.
-      </p>
       <div class="dialog-actions">
         <span class="dialog-actions-spacer"></span>
         <button class="secondary-button" id="usage-refresh" type="button">به‌روزرسانی</button>

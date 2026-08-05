@@ -878,7 +878,7 @@ function updateUsageButton() {
     ? `${summary.reachedReason}${reset}`
     : Number.isFinite(summary.maxUsed)
       ? `${formatUsagePercent(summary.maxUsed)} از سهمیهٔ حساب استفاده شده${reset}`
-      : "نمایش سهمیهٔ حساب و Context گفت‌وگو";
+      : "نمایش جزئیات مصرف";
   elements.usageButton.title = label;
   elements.usageButton.setAttribute("aria-label", label);
 }
@@ -910,8 +910,9 @@ function renderContextUsage() {
 
   const usedPercent = Math.min(100, Math.max(0, (usedTokens / windowSize) * 100));
   const roundedPercent = Number(usedPercent.toFixed(1));
+  const remainingTokens = Math.max(0, windowSize - usedTokens);
   elements.contextUsagePercent.textContent = `${roundedPercent.toLocaleString("fa-IR")}٪ پر`;
-  elements.contextUsageDetail.textContent = `${usedText} از ${windowSize.toLocaleString("fa-IR")} توکن`;
+  elements.contextUsageDetail.textContent = `${usedText} مصرف · ${remainingTokens.toLocaleString("fa-IR")} باقی · سقف ${windowSize.toLocaleString("fa-IR")} توکن`;
   elements.contextUsageFill.style.width = `${usedPercent}%`;
   elements.contextUsageProgress.setAttribute("aria-valuenow", String(roundedPercent));
 }
@@ -964,6 +965,7 @@ function renderUsageLimits() {
   elements.usageLimits.replaceChildren();
 
   if (state.rateLimitsLoading && !state.rateLimits) {
+    elements.usageOverview.classList.remove("hidden");
     elements.usageOverview.textContent = "در حال دریافت اطلاعات حساب…";
     const loading = document.createElement("p");
     loading.className = "usage-empty";
@@ -975,6 +977,7 @@ function renderUsageLimits() {
 
   const buckets = rateLimitBuckets();
   if (!buckets.length) {
+    elements.usageOverview.classList.remove("hidden");
     elements.usageOverview.textContent = state.rateLimitError
       ? "اطلاعات مصرف در دسترس نیست."
       : "هنوز اطلاعاتی گزارش نشده است.";
@@ -987,9 +990,10 @@ function renderUsageLimits() {
   }
 
   const summary = rateLimitSummary();
+  elements.usageOverview.classList.toggle("hidden", !summary.reachedReason);
   elements.usageOverview.textContent = summary.reachedReason
     ? `${summary.reachedReason}${summary.resetAt ? `؛ ${relativeResetTime(summary.resetAt)} باز می‌شود.` : "."}`
-    : `${formatUsagePercent(summary.maxUsed)} از پرمصرف‌ترین بازهٔ سهمیه استفاده شده است.`;
+    : "";
 
   buckets.forEach((bucket, bucketIndex) => {
     const card = document.createElement("section");
