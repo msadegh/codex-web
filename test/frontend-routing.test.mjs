@@ -1538,6 +1538,17 @@ test(
   "usage indicator shows quota windows and explains reached limits",
   { concurrency: false },
   async (t) => {
+    const [index, styles] = await Promise.all([
+      readFile(INDEX, "utf8"),
+      readFile(STYLES, "utf8"),
+    ]);
+    const usageValueRule =
+      styles.match(/\.usage-button bdi\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+    assert.match(index, /id="usage-percent" dir="rtl"/);
+    assert.match(usageValueRule, /font-family:\s*var\(--font\)/);
+    assert.doesNotMatch(usageValueRule, /var\(--mono\)/);
+    assert.match(usageValueRule, /direction:\s*rtl/);
+
     const resetAt = Math.floor(Date.now() / 1000) + 3_600;
     const rateLimits = {
       rateLimits: {

@@ -805,8 +805,12 @@ body.sidebar-collapsed .menu-button {
 
 .usage-button bdi {
   color: var(--accent-strong);
-  font-family: var(--mono);
-  font-size: 0.75rem;
+  font-family: var(--font);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  direction: rtl;
+  unicode-bidi: isolate;
 }
 
 .usage-button[data-state="warning"] bdi {
