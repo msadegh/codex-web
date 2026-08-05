@@ -2965,6 +2965,59 @@ dialog form,
   color: var(--accent-strong);
 }
 
+.usage-section + .usage-section {
+  margin-top: 17px;
+  padding-top: 17px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.usage-section-header {
+  display: flex;
+  margin-bottom: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.usage-section-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.usage-section-header p {
+  margin: 2px 0 0;
+  color: var(--muted-2);
+  font-size: 0.74rem;
+  line-height: 1.55;
+}
+
+.context-usage-percent {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage-progress {
+  margin-top: 0;
+}
+
+.context-usage-detail,
+.usage-overview {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.context-usage-detail {
+  margin: 7px 0 0;
+}
+
+.usage-overview {
+  margin: 0 0 10px;
+}
+
 .usage-limits {
   display: grid;
   gap: 10px;

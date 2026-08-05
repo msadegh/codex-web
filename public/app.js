@@ -293,6 +293,10 @@ const elements = {
   threadTitle: $("#thread-title"),
   toasts: $("#toasts"),
   uploadStatus: $("#upload-status"),
+  contextUsageDetail: $("#context-usage-detail"),
+  contextUsageFill: $("#context-usage-fill"),
+  contextUsagePercent: $("#context-usage-percent"),
+  contextUsageProgress: $("#context-usage-progress"),
   usageAccountDetails: $("#usage-account-details"),
   usageButton: $("#usage-button"),
   usageClose: $("#usage-close"),
@@ -738,7 +742,7 @@ function readableApproval(value) {
 }
 
 function contextUsageText(usage) {
-  const total = usage?.total?.totalTokens;
+  const total = usage?.last?.totalTokens;
   const windowSize = usage?.modelContextWindow;
   if (!Number.isFinite(total)) return "هنوز گزارش نشده";
   const totalText = total.toLocaleString("fa-IR");
@@ -873,10 +877,43 @@ function updateUsageButton() {
   const label = summary.reachedReason
     ? `${summary.reachedReason}${reset}`
     : Number.isFinite(summary.maxUsed)
-      ? `${formatUsagePercent(summary.maxUsed)} مصرف شده${reset}`
-      : "نمایش مصرف و محدودیت‌های Codex";
+      ? `${formatUsagePercent(summary.maxUsed)} از سهمیهٔ حساب استفاده شده${reset}`
+      : "نمایش سهمیهٔ حساب و Context گفت‌وگو";
   elements.usageButton.title = label;
   elements.usageButton.setAttribute("aria-label", label);
+}
+
+function renderContextUsage() {
+  const threadId = state.currentThreadId;
+  const usage = threadId ? state.threadTokenUsage.get(threadId) : null;
+  const usedTokens = usage?.last?.totalTokens;
+  const windowSize = usage?.modelContextWindow;
+
+  elements.contextUsagePercent.textContent = "—";
+  elements.contextUsageFill.style.width = "0%";
+  elements.contextUsageProgress.removeAttribute("aria-valuenow");
+
+  if (!threadId) {
+    elements.contextUsageDetail.textContent = "بعد از شروع گفت‌وگو نمایش داده می‌شود.";
+    return;
+  }
+  if (!Number.isFinite(usedTokens)) {
+    elements.contextUsageDetail.textContent = "Codex هنوز آمار Context این گفت‌وگو را گزارش نکرده است.";
+    return;
+  }
+
+  const usedText = usedTokens.toLocaleString("fa-IR");
+  if (!Number.isFinite(windowSize) || windowSize <= 0) {
+    elements.contextUsageDetail.textContent = `${usedText} توکن در Context فعال است؛ سقف مدل گزارش نشده.`;
+    return;
+  }
+
+  const usedPercent = Math.min(100, Math.max(0, (usedTokens / windowSize) * 100));
+  const roundedPercent = Number(usedPercent.toFixed(1));
+  elements.contextUsagePercent.textContent = `${roundedPercent.toLocaleString("fa-IR")}٪ پر`;
+  elements.contextUsageDetail.textContent = `${usedText} از ${windowSize.toLocaleString("fa-IR")} توکن`;
+  elements.contextUsageFill.style.width = `${usedPercent}%`;
+  elements.contextUsageProgress.setAttribute("aria-valuenow", String(roundedPercent));
 }
 
 function appendUsageAccountDetail(list, label, value) {
@@ -922,6 +959,7 @@ function renderUsageAccountDetails(buckets) {
 }
 
 function renderUsageLimits() {
+  renderContextUsage();
   updateUsageButton();
   elements.usageLimits.replaceChildren();
 
@@ -951,7 +989,7 @@ function renderUsageLimits() {
   const summary = rateLimitSummary();
   elements.usageOverview.textContent = summary.reachedReason
     ? `${summary.reachedReason}${summary.resetAt ? `؛ ${relativeResetTime(summary.resetAt)} باز می‌شود.` : "."}`
-    : `${formatUsagePercent(summary.maxUsed)} از پرمصرف‌ترین بازه استفاده شده است.`;
+    : `${formatUsagePercent(summary.maxUsed)} از پرمصرف‌ترین بازهٔ سهمیه استفاده شده است.`;
 
   buckets.forEach((bucket, bucketIndex) => {
     const card = document.createElement("section");
@@ -983,7 +1021,7 @@ function renderUsageLimits() {
       const label = document.createElement("span");
       label.textContent = formatWindowDuration(window.windowDurationMins);
       const value = document.createElement("bdi");
-      value.textContent = `${formatUsagePercent(used)} مصرف · ${formatUsagePercent(100 - used)} باقی`;
+      value.textContent = `${formatUsagePercent(used)} استفاده · ${formatUsagePercent(100 - used)} باقی`;
       heading.append(label, value);
 
       const progress = document.createElement("div");
@@ -1087,7 +1125,7 @@ async function refreshRateLimits({ force = false, silent = false } = {}) {
   } catch (error) {
     state.rateLimitError = error;
     renderUsageLimits();
-    if (!silent) showError(error, "دریافت مصرف Codex");
+    if (!silent) showError(error, "دریافت سهمیهٔ Codex");
   } finally {
     state.rateLimitsLoading = false;
     elements.usageRefresh.disabled = false;
@@ -4542,6 +4580,7 @@ function handleNotification(message) {
 
   if (method === "thread/tokenUsage/updated" && threadId) {
     state.threadTokenUsage.set(threadId, params.tokenUsage || null);
+    if (threadId === state.currentThreadId) renderContextUsage();
     return;
   }
 

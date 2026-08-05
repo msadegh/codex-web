@@ -144,10 +144,10 @@
               class="text-button usage-button"
               id="usage-button"
               type="button"
-              aria-label="نمایش مصرف و محدودیت‌های Codex"
-              title="مصرف و محدودیت‌های Codex"
+              aria-label="نمایش سهمیهٔ حساب و Context گفت‌وگو"
+              title="سهمیهٔ حساب و Context گفت‌وگو"
             >
-              <span>مصرف</span>
+              <span>سهمیه</span>
               <bdi id="usage-percent" dir="rtl">—</bdi>
             </button>
             <button class="text-button header-project-button" id="header-project" type="button">
@@ -648,15 +648,46 @@
       <div class="dialog-header">
         <div>
           <span class="dialog-eyebrow usage-eyebrow">Usage</span>
-          <h2>مصرف و محدودیت‌ها</h2>
-          <p id="usage-overview">در حال دریافت اطلاعات حساب…</p>
+          <h2>سهمیه و Context</h2>
+          <p>سهمیهٔ حساب و حافظهٔ فعال گفت‌وگو، دو معیار جدا هستند.</p>
         </div>
         <button class="icon-button" id="usage-close" type="button" aria-label="بستن">×</button>
       </div>
-      <div class="usage-limits" id="usage-limits" aria-live="polite"></div>
-      <div class="usage-account-details hidden" id="usage-account-details"></div>
+      <section class="usage-section context-usage-section" aria-labelledby="context-usage-title">
+        <div class="usage-section-header">
+          <div>
+            <h3 id="context-usage-title">Context گفت‌وگو</h3>
+            <p>حافظهٔ فعال همین گفت‌وگو؛ مستقل از سهمیهٔ حساب</p>
+          </div>
+          <bdi class="context-usage-percent" id="context-usage-percent" dir="rtl">—</bdi>
+        </div>
+        <div
+          class="usage-progress context-usage-progress"
+          id="context-usage-progress"
+          role="progressbar"
+          aria-label="میزان استفاده از Context گفت‌وگو"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        >
+          <span id="context-usage-fill"></span>
+        </div>
+        <p class="context-usage-detail" id="context-usage-detail" aria-live="polite">
+          بعد از شروع گفت‌وگو نمایش داده می‌شود.
+        </p>
+      </section>
+      <section class="usage-section account-usage-section" aria-labelledby="account-usage-title">
+        <div class="usage-section-header">
+          <div>
+            <h3 id="account-usage-title">سهمیهٔ حساب</h3>
+            <p>محدودیت زمانی حساب ChatGPT/Codex</p>
+          </div>
+        </div>
+        <p class="usage-overview" id="usage-overview">در حال دریافت اطلاعات حساب…</p>
+        <div class="usage-limits" id="usage-limits" aria-live="polite"></div>
+        <div class="usage-account-details hidden" id="usage-account-details"></div>
+      </section>
       <p class="usage-source-note">
-        این آمار سهمیهٔ حساب ChatGPT/Codex است؛ ارائه‌دهنده‌های سفارشی ممکن است محدودیت جداگانه داشته باشند.
+        ارائه‌دهنده‌های سفارشی ممکن است سهمیه و Context جداگانه‌ای گزارش کنند.
       </p>
       <div class="dialog-actions">
         <span class="dialog-actions-spacer"></span>

@@ -1535,7 +1535,7 @@ test(
 );
 
 test(
-  "usage indicator shows quota windows and explains reached limits",
+  "usage indicator separates account quota from active context usage",
   { concurrency: false },
   async (t) => {
     const [index, styles] = await Promise.all([
@@ -1549,7 +1549,17 @@ test(
     assert.doesNotMatch(usageValueRule, /var\(--mono\)/);
     assert.match(usageValueRule, /direction:\s*rtl/);
 
-    const resetAt = Math.floor(Date.now() / 1000) + 3_600;
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "usage-thread",
+      name: "Usage thread",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const resetAt = now + 3_600;
     const rateLimits = {
       rateLimits: {
         limitId: "codex",
@@ -1588,13 +1598,26 @@ test(
         return jsonResponse({ result: { data: [] } });
       }
       if (request.method === "thread/list") {
-        return jsonResponse({ result: { data: [], nextCursor: null } });
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: null } });
       }
       throw new Error(`Unexpected RPC method: ${request.method}`);
     };
 
-    const { window } = await createHarness(t, { fetchHandler });
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=usage-thread",
+    });
     const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === thread.name,
+      "usage thread did not open",
+    );
     await waitFor(
       () => document.querySelector("#usage-percent").textContent.includes("۸۲"),
       "usage percentage did not load",
@@ -1610,9 +1633,38 @@ test(
 
     document.querySelector("#usage-button").click();
     assert.equal(document.querySelector("#usage-dialog").open, true);
+    assert.match(document.querySelector("#usage-dialog").textContent, /دو معیار جدا/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /سهمیهٔ حساب/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /Context گفت‌وگو/);
     assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۵ ساعته/);
-    assert.match(document.querySelector("#usage-dialog").textContent, /۸۲٪ مصرف · ۱۸٪ باقی/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /۸۲٪ استفاده · ۱۸٪ باقی/);
     assert.match(document.querySelector("#usage-dialog").textContent, /بازنشانی رایگان/);
+
+    FakeEventSource.latest.emit("rpc", {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: thread.id,
+        turnId: "turn-usage",
+        tokenUsage: {
+          total: { totalTokens: 91_000 },
+          last: { totalTokens: 48_000 },
+          modelContextWindow: 200_000,
+        },
+      },
+    });
+    await waitFor(
+      () => document.querySelector("#context-usage-percent").textContent.includes("۲۴"),
+      "context usage percentage was not rendered",
+    );
+    assert.equal(document.querySelector("#context-usage-percent").textContent, "۲۴٪ پر");
+    assert.equal(
+      document.querySelector("#context-usage-detail").textContent,
+      "۴۸٬۰۰۰ از ۲۰۰٬۰۰۰ توکن",
+    );
+    assert.equal(
+      document.querySelector("#context-usage-progress").getAttribute("aria-valuenow"),
+      "24",
+    );
 
     FakeEventSource.latest.emit("rpc", {
       method: "account/rateLimits/updated",
@@ -1633,5 +1685,6 @@ test(
     assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۱ هفته‌ای/);
     document.querySelector("#usage-close").click();
     assert.equal(document.querySelector("#usage-dialog").open, false);
+    await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );
