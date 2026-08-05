@@ -1241,6 +1241,15 @@ body.sidebar-collapsed .menu-button {
   white-space: pre;
 }
 
+.code-block.has-rtl-code pre {
+  line-height: 1.8;
+}
+
+.code-rtl-text {
+  font-family: var(--font);
+  font-size: 1.02em;
+}
+
 .code-language {
   position: absolute;
   z-index: 1;

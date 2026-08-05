@@ -37,6 +37,13 @@ function blockDirection(value) {
   return /[\p{Script=Arabic}\p{Script=Hebrew}]/u.test(value) ? "rtl" : "ltr";
 }
 
+function codeBlockContent(value) {
+  return escapeHtml(value).replace(
+    /[\p{Script=Arabic}\u200c\u200d]+(?:[ \t]+[\p{Script=Arabic}\u200c\u200d]+)*/gu,
+    '<span class="code-rtl-text">$&</span>',
+  );
+}
+
 function splitTableRow(rawLine) {
   const line = rawLine.trim();
   const cells = [];
@@ -224,9 +231,11 @@ export function markdown(source) {
   };
 
   const flushFence = () => {
-    const content = escapeHtml(fenceLines.join("\n"));
+    const rawContent = fenceLines.join("\n");
+    const hasRtlText = blockDirection(rawContent) === "rtl";
+    const content = codeBlockContent(rawContent);
     output.push(
-      `<div class="code-block"><span class="code-language">${escapeHtml(fenceLanguage || "code")}</span>` +
+      `<div class="code-block${hasRtlText ? " has-rtl-code" : ""}"><span class="code-language">${escapeHtml(fenceLanguage || "code")}</span>` +
         `<button class="copy-code" type="button">کپی</button><pre><code>${content}</code></pre></div>`,
     );
     fenceLines = [];

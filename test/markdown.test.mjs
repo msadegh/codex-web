@@ -85,6 +85,25 @@ test("keeps purely English message blocks left-to-right", () => {
   assert.equal(root.querySelector("li").getAttribute("dir"), "ltr");
 });
 
+test("uses the Persian UI font only for RTL text inside code blocks", () => {
+  const root = render(`\`\`\`text
+پنل جاب‌بورد در مرورگر
+↓
+API اختصاصی ساخت رزومه
+\`\`\``);
+  const block = root.querySelector(".code-block");
+
+  assert.equal(block.classList.contains("has-rtl-code"), true);
+  assert.equal(block.querySelector(".code-rtl-text").textContent, "پنل جاب‌بورد در مرورگر");
+  assert.match(block.querySelector("code").innerHTML, /API <span class="code-rtl-text">اختصاصی ساخت رزومه<\/span>/);
+
+  const english = render(`\`\`\`js
+const answer = 42;
+\`\`\``);
+  assert.equal(english.querySelector(".code-block").classList.contains("has-rtl-code"), false);
+  assert.equal(english.querySelector(".code-rtl-text"), null);
+});
+
 test("renders structured answers with semantic section and list hierarchy", () => {
   const root = render(`## پیشنهاد اصلی
 
