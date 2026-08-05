@@ -22,16 +22,19 @@ const SLASH_COMMANDS = [
     name: "goal",
     label: "Goal mode",
     description: "تعیین هدفی که Codex در چند نوبت تا رسیدن به نتیجه پیگیری کند",
+    providers: ["codex"],
   },
   {
     name: "plan",
     label: "Plan mode",
     description: "روشن یا خاموش‌کردن حالت بررسی و برنامه‌ریزی قبل از اجرا",
+    providers: ["codex"],
   },
   {
     name: "compact",
     label: "فشرده‌سازی گفتگو",
     description: "خلاصه‌کردن context فعلی و آزادکردن فضای گفتگو",
+    providers: ["codex"],
   },
   {
     name: "new",
@@ -52,6 +55,12 @@ const SLASH_COMMANDS = [
     name: "status",
     label: "وضعیت گفتگو",
     description: "نمایش شناسه، مدل، دسترسی و مصرف context",
+  },
+  {
+    name: "usage",
+    label: "مصرف Codex",
+    description: "نمایش سهمیه، محدودیت فعال و زمان بازنشانی",
+    providers: ["codex"],
   },
   {
     name: "model",
@@ -579,6 +588,16 @@ function slashCommandByName(name) {
   return SLASH_COMMANDS.find((command) => command.name === name) || null;
 }
 
+function slashCommandSupportsProvider(command, provider = effectiveProvider()) {
+  return !command.providers || command.providers.includes(provider);
+}
+
+function slashCommandsForProvider(provider = effectiveProvider()) {
+  return SLASH_COMMANDS.filter((command) =>
+    slashCommandSupportsProvider(command, provider),
+  );
+}
+
 function parseSlashCommand(text) {
   const raw = String(text || "");
   const candidate = raw.trimStart();
@@ -608,8 +627,11 @@ function parseSlashCommand(text) {
 
 function slashCommandAvailability(command) {
   if (state.navigating) return { available: false, reason: "تا پایان بازشدن گفتگو صبر کنید." };
-  if (["goal", "plan"].includes(command.name) && effectiveProvider() !== "codex") {
-    return { available: false, reason: "این حالت فقط برای گفتگوهای Codex در دسترس است." };
+  if (!slashCommandSupportsProvider(command)) {
+    return {
+      available: false,
+      reason: `فرمان ${command.token} برای گفتگوهای ${providerLabel(effectiveProvider())} پشتیبانی نمی‌شود.`,
+    };
   }
   if (state.slashCommandExecuting && command.name === "compact") {
     return { available: false, reason: "یک فرمان دیگر در حال اجراست." };
@@ -617,12 +639,6 @@ function slashCommandAvailability(command) {
   if (command.name === "compact") {
     if (!state.currentThreadId) {
       return { available: false, reason: "ابتدا یک گفتگو را شروع یا باز کنید." };
-    }
-    if (effectiveProvider() !== "codex") {
-      return {
-        available: false,
-        reason: "فشرده‌سازی context فقط برای گفتگوهای Codex پشتیبانی می‌شود.",
-      };
     }
     if (!state.connected) return { available: false, reason: "Codex هنوز متصل نیست." };
     if (state.busy || state.compactPendingThreads.has(state.currentThreadId)) {
@@ -671,7 +687,7 @@ function updateSlashCommandMenu({ keepActiveCommand = true } = {}) {
   const previousActive = keepActiveCommand
     ? state.slashFilteredCommands[state.slashActiveIndex]?.name
     : null;
-  state.slashFilteredCommands = SLASH_COMMANDS.filter((command) =>
+  state.slashFilteredCommands = slashCommandsForProvider().filter((command) =>
     command.name.includes(query),
   );
   const previousIndex = previousActive
@@ -913,10 +929,12 @@ function showSlashStatus() {
 }
 
 function showSlashHelp() {
-  const card = renderLocalCommandCard("فرمان‌های پشتیبانی‌شده");
+  const card = renderLocalCommandCard(
+    `فرمان‌های پشتیبانی‌شده برای ${providerLabel(effectiveProvider())}`,
+  );
   const list = document.createElement("ul");
   list.className = "local-command-help";
-  for (const command of SLASH_COMMANDS) {
+  for (const command of slashCommandsForProvider()) {
     const item = document.createElement("li");
     const token = document.createElement("code");
     token.textContent = command.token;

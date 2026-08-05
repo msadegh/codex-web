@@ -302,7 +302,9 @@ options are disabled for Claude conversations.
 ## Slash commands
 
 Type `/` in the composer to open the command menu, then keep typing to filter
-the list or select a command with the keyboard, mouse, or touch.
+the list or select a command with the keyboard, mouse, or touch. The menu and
+`/help` only show commands supported by the active conversation's provider;
+for example, Codex-only commands are not offered in Claude conversations.
 
 | Command | Action |
 | --- | --- |
@@ -313,6 +315,7 @@ the list or select a command with the keyboard, mouse, or touch.
 | `/clear` | Clear the current view and start a fresh conversation |
 | `/resume` | Open the saved-conversation list |
 | `/status` | Show the current conversation status |
+| `/usage` | Show Codex account quota, active limits, and reset times |
 | `/model` | Open model settings |
 | `/permissions` | Open the permission settings for the selected provider |
 | `/settings` | Open all conversation settings |

@@ -1016,7 +1016,7 @@ test(
 );
 
 test(
-  "Claude conversations keep unsupported compact commands out of RPC",
+  "Claude conversations hide unsupported commands and keep them out of RPC",
   { concurrency: false },
   async (t) => {
     const now = Math.floor(Date.now() / 1000);
@@ -1063,6 +1063,23 @@ test(
       () => window.document.querySelector("#thread-title").textContent === "Claude slash",
       "Claude thread was not hydrated",
     );
+    typePrompt(window, "/");
+    assert.deepEqual(
+      [
+        ...window.document.querySelectorAll(
+          "#slash-command-options [data-slash-command]",
+        ),
+      ].map((option) => option.dataset.slashCommand),
+      ["new", "clear", "resume", "status", "model", "permissions", "settings", "help"],
+    );
+
+    typePrompt(window, "/co");
+    assert.equal(
+      window.document.querySelectorAll("#slash-command-options [data-slash-command]")
+        .length,
+      0,
+    );
+
     const prompt = typePrompt(window, "/compact");
     assert.equal(window.document.querySelector("#send-message").disabled, true);
     const enter = new window.Event("keydown", { bubbles: true, cancelable: true });
