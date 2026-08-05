@@ -1,7 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <title>Codex Web</title>
-  <rect width="64" height="64" rx="15" fill="#121512"/>
-  <rect x="3.25" y="3.25" width="57.5" height="57.5" rx="12.25" fill="none" stroke="#2a302a" stroke-width="2.5"/>
-  <path d="m18.5 20.5 11.5 11.5-11.5 11.5" fill="none" stroke="#d8ff6b" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <defs>
+    <linearGradient id="neon" x1="11" y1="10" x2="53" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#42e8ff"/>
+      <stop offset="0.52" stop-color="#7ab8ff"/>
+      <stop offset="1" stop-color="#9b6dff"/>
+    </linearGradient>
+    <radialGradient id="surface" cx="0" cy="0" r="1" gradientTransform="translate(32 27) rotate(90) scale(35)">
+      <stop stop-color="#292929"/>
+      <stop offset="1" stop-color="#171717"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#surface)"/>
+  <rect x="3.25" y="3.25" width="57.5" height="57.5" rx="12.25" fill="none" stroke="url(#neon)" stroke-width="2.5"/>
+  <path d="m18.5 20.5 11.5 11.5-11.5 11.5" fill="none" stroke="url(#neon)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M34 43.5h12" fill="none" stroke="#ececec" stroke-width="5" stroke-linecap="round"/>
 </svg>

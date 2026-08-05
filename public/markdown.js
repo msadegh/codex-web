@@ -37,6 +37,13 @@ function blockDirection(value) {
   return /[\p{Script=Arabic}\p{Script=Hebrew}]/u.test(value) ? "rtl" : "ltr";
 }
 
+function codeBlockContent(value) {
+  return escapeHtml(value).replace(
+    /[\p{Script=Arabic}\u200c\u200d]+(?:[ \t]+[\p{Script=Arabic}\u200c\u200d]+)*/gu,
+    '<span class="code-rtl-text">$&</span>',
+  );
+}
+
 function splitTableRow(rawLine) {
   const line = rawLine.trim();
   const cells = [];
@@ -145,43 +152,90 @@ function parseTable(lines, startIndex) {
   };
 }
 
+function listEntry(rawLine) {
+  const match = rawLine.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
+  if (!match) return null;
+  const whitespace = match[1].replaceAll("\t", "    ");
+  const ordered = /^\d/.test(match[2]);
+  return {
+    content: match[3],
+    indent: whitespace.length,
+    kind: ordered ? "ol" : "ul",
+    start: ordered ? Number.parseInt(match[2], 10) : null,
+  };
+}
+
+function parseList(lines, startIndex) {
+  const entries = [];
+  let nextIndex = startIndex;
+  while (nextIndex < lines.length) {
+    const entry = listEntry(lines[nextIndex]);
+    if (!entry) break;
+    entries.push(entry);
+    nextIndex += 1;
+  }
+  if (!entries.length) return null;
+
+  const html = [];
+  const stack = [];
+  const openLevel = (entry) => {
+    const start = entry.kind === "ol" && entry.start > 1 ? ` start="${entry.start}"` : "";
+    html.push(`<${entry.kind} dir="${blockDirection(entry.content)}"${start}>`);
+    stack.push({ indent: entry.indent, kind: entry.kind, liOpen: false });
+  };
+  const closeLevel = () => {
+    const level = stack.pop();
+    if (!level) return;
+    if (level.liOpen) html.push("</li>");
+    html.push(`</${level.kind}>`);
+  };
+
+  for (const entry of entries) {
+    while (stack.length && entry.indent < stack.at(-1).indent) closeLevel();
+
+    let current = stack.at(-1);
+    if (!current || entry.indent > current.indent) {
+      openLevel(entry);
+      current = stack.at(-1);
+    } else if (entry.kind !== current.kind) {
+      closeLevel();
+      openLevel(entry);
+      current = stack.at(-1);
+    } else if (current.liOpen) {
+      html.push("</li>");
+      current.liOpen = false;
+    }
+
+    const content = escapeHtml(entry.content);
+    html.push(`<li dir="${blockDirection(content)}">${inlineMarkdown(content)}`);
+    current.liOpen = true;
+  }
+
+  while (stack.length) closeLevel();
+  return { html: html.join(""), nextIndex };
+}
+
 export function markdown(source) {
   const lines = String(source ?? "").replaceAll("\r\n", "\n").split("\n");
   const output = [];
   let paragraph = [];
-  let list = null;
-  let listDirection = "";
   let inFence = false;
   let fenceLanguage = "";
   let fenceLines = [];
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    const content = paragraph.join("<br>");
+    const content = paragraph.join("\n");
     output.push(`<p dir="${blockDirection(content)}">${inlineMarkdown(content)}</p>`);
     paragraph = [];
   };
 
-  const closeList = () => {
-    if (!list) return;
-    output.push(`</${list}>`);
-    list = null;
-    listDirection = "";
-  };
-
-  const openList = (kind, direction) => {
-    flushParagraph();
-    if (list === kind && listDirection === direction) return;
-    closeList();
-    list = kind;
-    listDirection = direction;
-    output.push(`<${kind} dir="${direction}">`);
-  };
-
   const flushFence = () => {
-    const content = escapeHtml(fenceLines.join("\n"));
+    const rawContent = fenceLines.join("\n");
+    const hasRtlText = blockDirection(rawContent) === "rtl";
+    const content = codeBlockContent(rawContent);
     output.push(
-      `<div class="code-block"><span class="code-language">${escapeHtml(fenceLanguage || "code")}</span>` +
+      `<div class="code-block${hasRtlText ? " has-rtl-code" : ""}"><span class="code-language">${escapeHtml(fenceLanguage || "code")}</span>` +
         `<button class="copy-code" type="button">کپی</button><pre><code>${content}</code></pre></div>`,
     );
     fenceLines = [];
@@ -197,7 +251,6 @@ export function markdown(source) {
         flushFence();
       } else {
         flushParagraph();
-        closeList();
         inFence = true;
         fenceLanguage = fence[1].trim();
       }
@@ -211,7 +264,6 @@ export function markdown(source) {
     const table = parseTable(lines, index);
     if (table) {
       flushParagraph();
-      closeList();
       output.push(table.html);
       index = table.nextIndex - 1;
       continue;
@@ -220,14 +272,12 @@ export function markdown(source) {
     const line = escapeHtml(rawLine);
     if (!line.trim()) {
       flushParagraph();
-      closeList();
       continue;
     }
 
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       flushParagraph();
-      closeList();
       const level = heading[1].length;
       output.push(
         `<h${level} dir="${blockDirection(heading[2])}">${inlineMarkdown(heading[2])}</h${level}>`,
@@ -235,26 +285,23 @@ export function markdown(source) {
       continue;
     }
 
-    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
-    if (bullet) {
-      const direction = blockDirection(bullet[1]);
-      openList("ul", direction);
-      output.push(`<li dir="${direction}">${inlineMarkdown(bullet[1])}</li>`);
+    const list = parseList(lines, index);
+    if (list) {
+      flushParagraph();
+      output.push(list.html);
+      index = list.nextIndex - 1;
       continue;
     }
 
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (ordered) {
-      const direction = blockDirection(ordered[1]);
-      openList("ol", direction);
-      output.push(`<li dir="${direction}">${inlineMarkdown(ordered[1])}</li>`);
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(rawLine)) {
+      flushParagraph();
+      output.push('<hr class="markdown-divider">');
       continue;
     }
 
     const quote = line.match(/^&gt;\s?(.*)$/);
     if (quote) {
       flushParagraph();
-      closeList();
       output.push(
         `<blockquote dir="${blockDirection(quote[1])}">${inlineMarkdown(quote[1])}</blockquote>`,
       );
@@ -266,6 +313,5 @@ export function markdown(source) {
 
   if (inFence) flushFence();
   flushParagraph();
-  closeList();
   return output.join("");
 }

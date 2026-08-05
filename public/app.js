@@ -4,11 +4,11 @@ const $ = (selector) => document.querySelector(selector);
 const BASE_DOCUMENT_TITLE = "Codex Web";
 const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
 const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
-const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
-const MAX_IMAGES_PER_BATCH = 20;
+const MAX_ATTACHMENT_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_BATCH = 20;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const RESPONSE_STYLE_INSTRUCTIONS =
-  "Make final responses adaptively structured and easy to scan. Lead with the direct answer or outcome. If a response contains multiple distinct parts, organize it with Markdown: use short descriptive ## headings for major sections, ### only for genuine subsections, bullets for three or more parallel items, options, or findings, and numbered lists only for ordered actions. Keep paragraphs to one to three sentences and use bold labels sparingly for scan points. Turn list-like prose into real lists. Keep simple answers as a short paragraph. Avoid # headings, deep nesting, decorative sections, redundant summaries, and tables unless a comparison is genuinely clearer.";
+  "Format final responses with clear, polished visual hierarchy. Lead with a short direct answer or outcome and match the user's language. For comparisons between two or more subjects across three or more attributes, use a compact Markdown table by default. Use short descriptive ## headings when the answer has distinct sections, ### only for genuine subsections, bullets for three or more parallel items, options, or findings, and numbered lists only for ordered actions. Selectively bold key terms, labels, decisions, and conclusions so the answer is easy to scan. Turn list-like prose into real lists. Keep paragraphs to one to three sentences and keep simple answers as short prose. Avoid # headings, deep nesting, decorative sections, redundant summaries, and tables for trivial one- or two-point answers.";
 const IMAGE_EXTENSIONS = {
   "image/avif": "avif",
   "image/bmp": "bmp",
@@ -52,6 +52,11 @@ const SLASH_COMMANDS = [
     name: "status",
     label: "وضعیت گفتگو",
     description: "نمایش شناسه، مدل، دسترسی و مصرف context",
+  },
+  {
+    name: "usage",
+    label: "مصرف Codex",
+    description: "نمایش سهمیه، محدودیت فعال و زمان بازنشانی",
   },
   {
     name: "model",
@@ -167,6 +172,12 @@ const KNOWN_CODEX_COMMAND_NAMES = new Set([
 
 const elements = {
   addImages: $("#add-images"),
+  assignProjectCancel: $("#assign-project-cancel"),
+  assignProjectClose: $("#assign-project-close"),
+  assignProjectDialog: $("#assign-project-dialog"),
+  assignProjectForm: $("#assign-project-form"),
+  assignProjectOptions: $("#assign-project-options"),
+  assignProjectSave: $("#assign-project-save"),
   approvalAccept: $("#approval-accept"),
   approvalCancel: $("#approval-cancel"),
   approvalContext: $("#approval-context"),
@@ -180,6 +191,8 @@ const elements = {
   approvalSelect: $("#approval-select"),
   connectionLabel: $("#connection-label"),
   composerHint: $("#composer-hint"),
+  composer: $(".composer"),
+  composerDropOverlay: $("#composer-drop-overlay"),
   composerTools: $("#composer-tools"),
   composerToolsMenu: $("#composer-tools-menu"),
   composerToolsNote: $("#composer-tools-note"),
@@ -191,6 +204,8 @@ const elements = {
   effortSelect: $("#effort-select"),
   fullAccessWarning: $("#full-access-warning"),
   headerSettings: $("#header-settings"),
+  headerProject: $("#header-project"),
+  headerProjectLabel: $("#header-project-label"),
   imageInput: $("#image-input"),
   goalClear: $("#goal-clear"),
   goalDialog: $("#goal-dialog"),
@@ -229,6 +244,20 @@ const elements = {
   providerSelect: $("#provider-select"),
   claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
+  projectAdd: $("#project-add"),
+  projectAll: $("#project-all"),
+  projectCancel: $("#project-cancel"),
+  projectCwd: $("#project-cwd"),
+  projectDelete: $("#project-delete"),
+  projectDialog: $("#project-dialog"),
+  projectDialogClose: $("#project-dialog-close"),
+  projectDialogTitle: $("#project-dialog-title"),
+  projectForm: $("#project-form"),
+  projectId: $("#project-id"),
+  projectInstructions: $("#project-instructions"),
+  projectList: $("#project-list"),
+  projectName: $("#project-name"),
+  projectSave: $("#project-save"),
   prompt: $("#prompt"),
   promptQueue: $("#prompt-queue"),
   promptQueueClear: $("#prompt-queue-clear"),
@@ -239,6 +268,13 @@ const elements = {
   scrollBottom: $("#scroll-bottom"),
   sendMessage: $("#send-message"),
   selectionAsk: $("#selection-ask"),
+  shareChat: $("#share-chat"),
+  shareCopy: $("#share-copy"),
+  shareDialog: $("#share-dialog"),
+  shareDialogClose: $("#share-dialog-close"),
+  shareLink: $("#share-link"),
+  shareRefresh: $("#share-refresh"),
+  shareRevoke: $("#share-revoke"),
   settingsCancel: $("#settings-cancel"),
   settingsClose: $("#settings-close"),
   settingsDialog: $("#settings-dialog"),
@@ -257,6 +293,18 @@ const elements = {
   threadTitle: $("#thread-title"),
   toasts: $("#toasts"),
   uploadStatus: $("#upload-status"),
+  contextUsageDetail: $("#context-usage-detail"),
+  contextUsageFill: $("#context-usage-fill"),
+  contextUsagePercent: $("#context-usage-percent"),
+  contextUsageProgress: $("#context-usage-progress"),
+  usageAccountDetails: $("#usage-account-details"),
+  usageButton: $("#usage-button"),
+  usageClose: $("#usage-close"),
+  usageDialog: $("#usage-dialog"),
+  usageLimits: $("#usage-limits"),
+  usageOverview: $("#usage-overview"),
+  usagePercent: $("#usage-percent"),
+  usageRefresh: $("#usage-refresh"),
   userMessageNavigationStatus: $("#user-message-navigation-status"),
   welcome: $("#welcome"),
   welcomeDescription: $("#welcome-description"),
@@ -269,6 +317,7 @@ const defaultSettings = {
   cwd: "",
   effort: "",
   modelByProvider: { codex: "", claude: "" },
+  palette: "cyan",
   personality: "",
   provider: "codex",
   sandbox: "",
@@ -276,8 +325,19 @@ const defaultSettings = {
 };
 
 const SETTINGS_VERSION = 5;
+const ACCENT_PALETTES = new Set(["cyan", "red", "purple", "green"]);
+const ACTIVE_PROJECT_KEY = "codex-web-active-project";
+
+function loadActiveProjectId() {
+  try {
+    return localStorage.getItem(ACTIVE_PROJECT_KEY) || null;
+  } catch {
+    return null;
+  }
+}
 
 const state = {
+  activeProjectId: loadActiveProjectId(),
   activeInteractionKey: null,
   busy: false,
   collaborationModes: [],
@@ -292,12 +352,14 @@ const state = {
   dictationFinal: "",
   dictationRecognition: null,
   drafts: new Map(),
+  draftProjects: new Map(),
   eventSource: null,
   followOutput: true,
   goals: new Map(),
   goalLoadingThreads: new Set(),
   goalSaving: false,
   itemViews: new Map(),
+  turnProcessViews: new Map(),
   navigationVersion: 0,
   models: [],
   modelsByProvider: { codex: [], claude: [] },
@@ -311,13 +373,14 @@ const state = {
   pendingTurnStarts: 0,
   postponedInteractions: new Set(),
   promptQueues: new Map(),
+  projects: [],
   providerStatuses: {
     claude: { message: "Claude Code CLI پیدا نشد", ready: false },
     codex: { message: "در حال راه‌اندازی Codex…", ready: false },
   },
   queueProcessing: new Set(),
   forceNextScroll: false,
-  imageUploadsByDraft: new Map(),
+  attachmentUploadsByDraft: new Map(),
   interactionSubmitting: false,
   scrollFrame: null,
   scrollingToBottom: false,
@@ -330,9 +393,16 @@ const state = {
   threadActivity: new Map(),
   threadEventBacklog: new Map(),
   threadRuntime: new Map(),
+  threadProjects: new Map(),
   threadTokenUsage: new Map(),
   threads: [],
   threadsRefreshVersion: 0,
+  rateLimitError: null,
+  rateLimits: null,
+  rateLimitsFetchedAt: 0,
+  rateLimitsLoading: false,
+  notifiedRateLimitKey: null,
+  usageClockTimer: null,
   urlHydrationActiveKey: null,
   urlHydrationPending: null,
   urlHydrated: false,
@@ -357,12 +427,20 @@ function loadSettings() {
       claudePermissionMode:
         savedSettings.claudePermissionMode || defaultSettings.claudePermissionMode,
       modelByProvider,
+      palette: ACCENT_PALETTES.has(savedSettings.palette)
+        ? savedSettings.palette
+        : defaultSettings.palette,
       provider: savedSettings.provider === "claude" ? "claude" : defaultSettings.provider,
       sidebarCollapsed: savedSettings.sidebarCollapsed === true,
     };
   } catch {
     return { ...defaultSettings };
   }
+}
+
+function applyPalette(palette = defaultSettings.palette) {
+  const next = ACCENT_PALETTES.has(palette) ? palette : defaultSettings.palette;
+  document.documentElement.dataset.palette = next;
 }
 
 function persistSettings() {
@@ -494,16 +572,16 @@ function slashCommandAvailability(command) {
     if (state.busy || state.compactPendingThreads.has(state.currentThreadId)) {
       return { available: false, reason: "پس از پایان کار فعلی دوباره امتحان کنید." };
     }
-    if (imageUploadsForDraft() > 0) {
-      return { available: false, reason: "تا پایان افزودن تصویرها صبر کنید." };
+    if (attachmentUploadsForDraft() > 0) {
+      return { available: false, reason: "تا پایان افزودن فایل‌ها صبر کنید." };
     }
   }
   if (
     (command.name === "new" || command.name === "clear") &&
     !state.currentThreadId &&
-    imageUploadsForDraft() > 0
+    attachmentUploadsForDraft() > 0
   ) {
-    return { available: false, reason: "تا پایان افزودن تصویرها صبر کنید." };
+    return { available: false, reason: "تا پایان افزودن فایل‌ها صبر کنید." };
   }
   return { available: true, reason: "" };
 }
@@ -664,7 +742,7 @@ function readableApproval(value) {
 }
 
 function contextUsageText(usage) {
-  const total = usage?.total?.totalTokens;
+  const total = usage?.last?.totalTokens;
   const windowSize = usage?.modelContextWindow;
   if (!Number.isFinite(total)) return "هنوز گزارش نشده";
   const totalText = total.toLocaleString("fa-IR");
@@ -674,6 +752,405 @@ function contextUsageText(usage) {
     "fa-IR",
     { maximumFractionDigits: 1 },
   )}٪)`;
+}
+
+const RATE_LIMIT_REACHED_LABELS = {
+  rate_limit_reached: "سهمیهٔ این بازه تمام شده است",
+  workspace_member_credits_depleted: "اعتبار workspace تمام شده؛ مدیر باید اعتبار اضافه کند",
+  workspace_owner_credits_depleted: "اعتبار workspace تمام شده است",
+  workspace_member_usage_limit_reached: "سقف مصرف workspace پر شده؛ با مدیر workspace تماس بگیرید",
+  workspace_owner_usage_limit_reached: "سقف مصرف workspace پر شده است",
+};
+
+const PLAN_LABELS = {
+  business: "Business",
+  edu: "Edu",
+  enterprise: "Enterprise",
+  free: "Free",
+  plus: "Plus",
+  pro: "Pro",
+  team: "Team",
+};
+
+function clampUsagePercent(value) {
+  return Math.min(100, Math.max(0, Number(value) || 0));
+}
+
+function formatUsagePercent(value) {
+  return `${clampUsagePercent(value).toLocaleString("fa-IR")}٪`;
+}
+
+function formatWindowDuration(minutes) {
+  const value = Number(minutes);
+  if (!Number.isFinite(value) || value <= 0) return "بازهٔ مصرف";
+  if (value % 10_080 === 0) {
+    return `بازهٔ ${(value / 10_080).toLocaleString("fa-IR")} هفته‌ای`;
+  }
+  if (value % 1_440 === 0) {
+    return `بازهٔ ${(value / 1_440).toLocaleString("fa-IR")} روزه`;
+  }
+  if (value % 60 === 0) {
+    return `بازهٔ ${(value / 60).toLocaleString("fa-IR")} ساعته`;
+  }
+  return `بازهٔ ${value.toLocaleString("fa-IR")} دقیقه‌ای`;
+}
+
+function relativeResetTime(timestamp) {
+  const resetMs = Number(timestamp) * 1000;
+  if (!Number.isFinite(resetMs) || resetMs <= 0) return "زمان بازنشانی نامشخص است";
+  const deltaMs = resetMs - Date.now();
+  const formatter = new Intl.RelativeTimeFormat("fa-IR", { numeric: "auto" });
+  const units = [
+    ["day", 86_400_000],
+    ["hour", 3_600_000],
+    ["minute", 60_000],
+  ];
+  const [unit, size] = units.find(([, threshold]) => Math.abs(deltaMs) >= threshold) || [
+    "minute",
+    60_000,
+  ];
+  const raw = deltaMs / size;
+  const amount = raw >= 0 ? Math.max(1, Math.ceil(raw)) : Math.floor(raw);
+  return formatter.format(amount, unit);
+}
+
+function exactResetTime(timestamp) {
+  const date = new Date(Number(timestamp) * 1000);
+  if (Number.isNaN(date.getTime())) return "نامشخص";
+  return date.toLocaleString("fa-IR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function rateLimitBuckets(data = state.rateLimits) {
+  const buckets = Object.values(data?.rateLimitsByLimitId || {}).filter(Boolean);
+  if (buckets.length) return buckets;
+  return data?.rateLimits ? [data.rateLimits] : [];
+}
+
+function rateLimitWindows(bucket) {
+  return [bucket?.primary, bucket?.secondary].filter(Boolean);
+}
+
+function rateLimitReachedReason(bucket) {
+  if (bucket?.rateLimitReachedType) {
+    return RATE_LIMIT_REACHED_LABELS[bucket.rateLimitReachedType] || "محدودیت مصرف فعال شده است";
+  }
+  if (bucket?.spendControlReached) return "سقف هزینهٔ تعیین‌شده پر شده است";
+  if (rateLimitWindows(bucket).some((window) => Number(window.usedPercent) >= 100)) {
+    return "سهمیهٔ این بازه تمام شده است";
+  }
+  return "";
+}
+
+function rateLimitSummary(data = state.rateLimits) {
+  const buckets = rateLimitBuckets(data);
+  const windows = buckets.flatMap(rateLimitWindows);
+  const maxUsed = windows.length
+    ? Math.max(...windows.map((window) => clampUsagePercent(window.usedPercent)))
+    : null;
+  const reachedBucket = buckets.find((bucket) => rateLimitReachedReason(bucket));
+  const reachedReason = reachedBucket ? rateLimitReachedReason(reachedBucket) : "";
+  const resetCandidates = (reachedBucket ? rateLimitWindows(reachedBucket) : windows)
+    .map((window) => Number(window.resetsAt))
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0)
+    .sort((left, right) => left - right);
+  return {
+    maxUsed,
+    reachedReason,
+    resetAt: resetCandidates[0] || null,
+  };
+}
+
+function updateUsageButton() {
+  const summary = rateLimitSummary();
+  elements.usageButton.dataset.state = summary.reachedReason
+    ? "reached"
+    : summary.maxUsed >= 80
+      ? "warning"
+      : "normal";
+  elements.usagePercent.textContent = Number.isFinite(summary.maxUsed)
+    ? formatUsagePercent(summary.maxUsed)
+    : "—";
+  const reset = summary.resetAt ? `؛ بازنشانی ${relativeResetTime(summary.resetAt)}` : "";
+  const label = summary.reachedReason
+    ? `${summary.reachedReason}${reset}`
+    : Number.isFinite(summary.maxUsed)
+      ? `${formatUsagePercent(summary.maxUsed)} از سهمیهٔ حساب استفاده شده${reset}`
+      : "نمایش جزئیات مصرف";
+  elements.usageButton.title = label;
+  elements.usageButton.setAttribute("aria-label", label);
+}
+
+function renderContextUsage() {
+  const threadId = state.currentThreadId;
+  const usage = threadId ? state.threadTokenUsage.get(threadId) : null;
+  const usedTokens = usage?.last?.totalTokens;
+  const windowSize = usage?.modelContextWindow;
+
+  elements.contextUsagePercent.textContent = "—";
+  elements.contextUsageFill.style.width = "0%";
+  elements.contextUsageProgress.removeAttribute("aria-valuenow");
+
+  if (!threadId) {
+    elements.contextUsageDetail.textContent = "بعد از شروع گفت‌وگو نمایش داده می‌شود.";
+    return;
+  }
+  if (!Number.isFinite(usedTokens)) {
+    elements.contextUsageDetail.textContent = "Codex هنوز آمار Context این گفت‌وگو را گزارش نکرده است.";
+    return;
+  }
+
+  const usedText = usedTokens.toLocaleString("fa-IR");
+  if (!Number.isFinite(windowSize) || windowSize <= 0) {
+    elements.contextUsageDetail.textContent = `${usedText} توکن در Context فعال است؛ سقف مدل گزارش نشده.`;
+    return;
+  }
+
+  const usedPercent = Math.min(100, Math.max(0, (usedTokens / windowSize) * 100));
+  const roundedPercent = Number(usedPercent.toFixed(1));
+  const remainingTokens = Math.max(0, windowSize - usedTokens);
+  elements.contextUsagePercent.textContent = `${roundedPercent.toLocaleString("fa-IR")}٪ پر`;
+  elements.contextUsageDetail.textContent = `${usedText} مصرف · ${remainingTokens.toLocaleString("fa-IR")} باقی · سقف ${windowSize.toLocaleString("fa-IR")} توکن`;
+  elements.contextUsageFill.style.width = `${usedPercent}%`;
+  elements.contextUsageProgress.setAttribute("aria-valuenow", String(roundedPercent));
+}
+
+function appendUsageAccountDetail(list, label, value) {
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const detail = document.createElement("dd");
+  detail.textContent = value;
+  list.append(term, detail);
+}
+
+function renderUsageAccountDetails(buckets) {
+  const first = buckets[0] || null;
+  const details = document.createElement("dl");
+  const plan = first?.planType ? PLAN_LABELS[first.planType] || first.planType : "";
+  if (plan) appendUsageAccountDetail(details, "پلن", plan);
+
+  const credits = first?.credits;
+  if (credits?.unlimited) {
+    appendUsageAccountDetail(details, "اعتبار اضافه", "نامحدود");
+  } else if (credits?.hasCredits || Number(credits?.balance) > 0) {
+    appendUsageAccountDetail(details, "اعتبار باقی‌مانده", String(credits.balance || "۰"));
+  }
+
+  const resetCredits = state.rateLimits?.rateLimitResetCredits;
+  if (Number(resetCredits?.availableCount) > 0) {
+    appendUsageAccountDetail(
+      details,
+      "بازنشانی رایگان",
+      `${Number(resetCredits.availableCount).toLocaleString("fa-IR")} مورد`,
+    );
+  }
+
+  if (first?.individualLimit) {
+    appendUsageAccountDetail(
+      details,
+      "سقف هزینه",
+      `${Number(first.individualLimit.remainingPercent).toLocaleString("fa-IR")}٪ باقی‌مانده`,
+    );
+  }
+
+  elements.usageAccountDetails.replaceChildren(details);
+  elements.usageAccountDetails.classList.toggle("hidden", details.childElementCount === 0);
+}
+
+function renderUsageLimits() {
+  renderContextUsage();
+  updateUsageButton();
+  elements.usageLimits.replaceChildren();
+
+  if (state.rateLimitsLoading && !state.rateLimits) {
+    elements.usageOverview.classList.remove("hidden");
+    elements.usageOverview.textContent = "در حال دریافت اطلاعات حساب…";
+    const loading = document.createElement("p");
+    loading.className = "usage-empty";
+    loading.textContent = "کمی صبر کنید.";
+    elements.usageLimits.append(loading);
+    elements.usageAccountDetails.classList.add("hidden");
+    return;
+  }
+
+  const buckets = rateLimitBuckets();
+  if (!buckets.length) {
+    elements.usageOverview.classList.remove("hidden");
+    elements.usageOverview.textContent = state.rateLimitError
+      ? "اطلاعات مصرف در دسترس نیست."
+      : "هنوز اطلاعاتی گزارش نشده است.";
+    const empty = document.createElement("p");
+    empty.className = "usage-empty";
+    empty.textContent = state.rateLimitError?.message || "برای دریافت دوباره، به‌روزرسانی را بزنید.";
+    elements.usageLimits.append(empty);
+    elements.usageAccountDetails.classList.add("hidden");
+    return;
+  }
+
+  const summary = rateLimitSummary();
+  elements.usageOverview.classList.toggle("hidden", !summary.reachedReason);
+  elements.usageOverview.textContent = summary.reachedReason
+    ? `${summary.reachedReason}${summary.resetAt ? `؛ ${relativeResetTime(summary.resetAt)} باز می‌شود.` : "."}`
+    : "";
+
+  buckets.forEach((bucket, bucketIndex) => {
+    const card = document.createElement("section");
+    const reachedReason = rateLimitReachedReason(bucket);
+    card.className = "usage-limit-card";
+    card.dataset.state = reachedReason ? "reached" : "normal";
+
+    const header = document.createElement("div");
+    header.className = "usage-limit-header";
+    const title = document.createElement("strong");
+    title.textContent =
+      bucket.limitName || (bucket.limitId === "codex" ? "Codex" : bucket.limitId) ||
+      `سهمیهٔ ${(bucketIndex + 1).toLocaleString("fa-IR")}`;
+    header.append(title);
+    if (reachedReason) {
+      const status = document.createElement("span");
+      status.className = "usage-limit-status";
+      status.textContent = "محدود";
+      header.append(status);
+    }
+    card.append(header);
+
+    for (const window of rateLimitWindows(bucket)) {
+      const used = clampUsagePercent(window.usedPercent);
+      const row = document.createElement("div");
+      row.className = "usage-window";
+      const heading = document.createElement("div");
+      heading.className = "usage-window-heading";
+      const label = document.createElement("span");
+      label.textContent = formatWindowDuration(window.windowDurationMins);
+      const value = document.createElement("bdi");
+      value.textContent = `${formatUsagePercent(used)} استفاده · ${formatUsagePercent(100 - used)} باقی`;
+      heading.append(label, value);
+
+      const progress = document.createElement("div");
+      progress.className = "usage-progress";
+      progress.setAttribute("role", "progressbar");
+      progress.setAttribute("aria-valuemin", "0");
+      progress.setAttribute("aria-valuemax", "100");
+      progress.setAttribute("aria-valuenow", String(used));
+      const fill = document.createElement("span");
+      fill.style.width = `${used}%`;
+      progress.append(fill);
+      row.append(heading, progress);
+
+      if (window.resetsAt) {
+        const reset = document.createElement("small");
+        reset.textContent = `بازنشانی ${relativeResetTime(window.resetsAt)} · ${exactResetTime(window.resetsAt)}`;
+        row.append(reset);
+      }
+      card.append(row);
+    }
+
+    if (!rateLimitWindows(bucket).length) {
+      const note = document.createElement("p");
+      note.className = "usage-empty";
+      note.textContent = reachedReason || "جزئیات بازه گزارش نشده است.";
+      card.append(note);
+    }
+    elements.usageLimits.append(card);
+  });
+
+  renderUsageAccountDetails(buckets);
+}
+
+function mergeRateLimitSnapshot(previous, incoming) {
+  if (!previous) return incoming;
+  if (!incoming) return previous;
+  return {
+    ...previous,
+    ...incoming,
+    primary: incoming.primary
+      ? { ...(previous.primary || {}), ...incoming.primary }
+      : previous.primary,
+    secondary: incoming.secondary
+      ? { ...(previous.secondary || {}), ...incoming.secondary }
+      : Object.hasOwn(incoming, "secondary")
+        ? incoming.secondary
+        : previous.secondary,
+  };
+}
+
+function applyRateLimits(data, { notify = false } = {}) {
+  const previous = state.rateLimits || {};
+  const incoming = data || {};
+  const next = {
+    ...previous,
+    ...incoming,
+    rateLimits: mergeRateLimitSnapshot(previous.rateLimits, incoming.rateLimits),
+  };
+  if (incoming.rateLimitsByLimitId) {
+    next.rateLimitsByLimitId = {
+      ...(previous.rateLimitsByLimitId || {}),
+      ...incoming.rateLimitsByLimitId,
+    };
+  } else if (incoming.rateLimits?.limitId && previous.rateLimitsByLimitId) {
+    const id = incoming.rateLimits.limitId;
+    next.rateLimitsByLimitId = {
+      ...previous.rateLimitsByLimitId,
+      [id]: mergeRateLimitSnapshot(previous.rateLimitsByLimitId[id], incoming.rateLimits),
+    };
+  }
+  state.rateLimits = next;
+  state.rateLimitError = null;
+  state.rateLimitsFetchedAt = Date.now();
+  renderUsageLimits();
+
+  const summary = rateLimitSummary(next);
+  if (!summary.reachedReason) {
+    state.notifiedRateLimitKey = null;
+    return;
+  }
+  const notificationKey = `${summary.reachedReason}:${summary.resetAt || "unknown"}`;
+  if (!notify || state.notifiedRateLimitKey === notificationKey) return;
+  state.notifiedRateLimitKey = notificationKey;
+  const reset = summary.resetAt ? ` ${relativeResetTime(summary.resetAt)} دوباره باز می‌شود.` : "";
+  toast(`${summary.reachedReason}.${reset}`, "error", {
+    duration: 12_000,
+    onClick: openUsageDialog,
+  });
+}
+
+async function refreshRateLimits({ force = false, silent = false } = {}) {
+  if (state.rateLimitsLoading) return;
+  if (!force && Date.now() - state.rateLimitsFetchedAt < 15_000) return;
+  state.rateLimitsLoading = true;
+  state.rateLimitError = null;
+  renderUsageLimits();
+  elements.usageRefresh.disabled = true;
+  try {
+    const result = await rpc("account/rateLimits/read", { provider: "codex" });
+    applyRateLimits(result, { notify: true });
+  } catch (error) {
+    state.rateLimitError = error;
+    renderUsageLimits();
+    if (!silent) showError(error, "دریافت سهمیهٔ Codex");
+  } finally {
+    state.rateLimitsLoading = false;
+    elements.usageRefresh.disabled = false;
+    renderUsageLimits();
+  }
+}
+
+function openUsageDialog() {
+  if (!elements.usageDialog.open) elements.usageDialog.showModal();
+  renderUsageLimits();
+  if (!state.rateLimits || Date.now() - state.rateLimitsFetchedAt > 60_000) {
+    void refreshRateLimits({ force: true });
+  }
+  clearInterval(state.usageClockTimer);
+  state.usageClockTimer = setInterval(renderUsageLimits, 60_000);
+}
+
+function closeUsageDialog() {
+  clearInterval(state.usageClockTimer);
+  state.usageClockTimer = null;
+  elements.usageDialog.close();
 }
 
 function showSlashStatus() {
@@ -831,6 +1308,10 @@ async function executeSlashCommand(command) {
       clearSlashCommandText(command.token, targetDraftKey);
       showSlashStatus();
       return;
+    case "usage":
+      clearSlashCommandText(command.token, targetDraftKey);
+      openUsageDialog();
+      return;
     case "model":
       clearSlashCommandText(command.token, targetDraftKey);
       openSettings({ focus: elements.modelSelect, provider: effectiveProvider() });
@@ -976,24 +1457,24 @@ function scheduleSelectionAskUpdate() {
   });
 }
 
-function appendImagePaths(value, paths) {
+function appendAttachmentPaths(value, paths) {
   const pathText = paths.join("\n");
   if (!value) return pathText;
   return `${value}${value.endsWith("\n") ? "" : "\n"}${pathText}`;
 }
 
-function insertImagePaths(paths, targetDraftKey) {
+function insertAttachmentPaths(paths, targetDraftKey) {
   if (!paths.length) return;
   if (draftKey() !== targetDraftKey) {
     state.drafts.set(
       targetDraftKey,
-      appendImagePaths(state.drafts.get(targetDraftKey) || "", paths),
+      appendAttachmentPaths(state.drafts.get(targetDraftKey) || "", paths),
     );
-    toast("مسیر تصویر به پیش‌نویس گفتگوی مربوط اضافه شد.", "success");
+    toast("مسیر پیوست به پیش‌نویس گفتگوی مربوط اضافه شد.", "success");
     return;
   }
 
-  elements.prompt.value = appendImagePaths(elements.prompt.value, paths);
+  elements.prompt.value = appendAttachmentPaths(elements.prompt.value, paths);
   elements.prompt.setSelectionRange(
     elements.prompt.value.length,
     elements.prompt.value.length,
@@ -1003,18 +1484,19 @@ function insertImagePaths(paths, targetDraftKey) {
   elements.prompt.focus();
 }
 
-async function uploadImage(file) {
-  const type = String(file.type || "").toLowerCase();
-  if (!Object.hasOwn(IMAGE_EXTENSIONS, type)) {
-    throw new Error("فرمت این تصویر پشتیبانی نمی‌شود.");
-  }
-  if (!file.size) throw new Error("فایل تصویر خالی است.");
-  if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
-    throw new Error("حجم هر تصویر باید حداکثر ۲۵ مگابایت باشد.");
+async function uploadAttachment(file) {
+  const declaredType = String(file.type || "").toLowerCase();
+  const image = Object.hasOwn(IMAGE_EXTENSIONS, declaredType);
+  const type = declaredType || "application/octet-stream";
+  if (!file.size) throw new Error("فایل خالی است.");
+  if (file.size > MAX_ATTACHMENT_UPLOAD_BYTES) {
+    throw new Error("حجم هر فایل باید حداکثر ۲۵ مگابایت باشد.");
   }
 
-  const fallbackName = `clipboard-${Date.now()}.${IMAGE_EXTENSIONS[type]}`;
-  const response = await fetch("/api/uploads/images", {
+  const fallbackName = image
+    ? `clipboard-${Date.now()}.${IMAGE_EXTENSIONS[type]}`
+    : `attachment-${Date.now()}`;
+  const response = await fetch(image ? "/api/uploads/images" : "/api/uploads/files", {
     method: "POST",
     headers: {
       "Content-Type": type,
@@ -1030,33 +1512,33 @@ async function uploadImage(file) {
     typeof data.path !== "string" ||
     (!data.path.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(data.path))
   ) {
-    throw new Error("سرور مسیر معتبری برای تصویر برنگرداند.");
+    throw new Error("سرور مسیر معتبری برای فایل برنگرداند.");
   }
   return data.path;
 }
 
-async function uploadImages(files, targetDraftKey = draftKey()) {
-  const selectedImages = [...files].filter(Boolean);
-  const images = selectedImages.slice(0, MAX_IMAGES_PER_BATCH);
-  if (!images.length) return;
-  if (selectedImages.length > MAX_IMAGES_PER_BATCH) {
+async function uploadAttachments(files, targetDraftKey = draftKey()) {
+  const selectedAttachments = [...files].filter(Boolean);
+  const attachments = selectedAttachments.slice(0, MAX_ATTACHMENTS_PER_BATCH);
+  if (!attachments.length) return;
+  if (selectedAttachments.length > MAX_ATTACHMENTS_PER_BATCH) {
     toast(
-      `در هر نوبت حداکثر ${MAX_IMAGES_PER_BATCH.toLocaleString("fa-IR")} تصویر اضافه می‌شود.`,
+      `در هر نوبت حداکثر ${MAX_ATTACHMENTS_PER_BATCH.toLocaleString("fa-IR")} فایل اضافه می‌شود.`,
       "warning",
       { duration: 7000 },
     );
   }
 
-  state.imageUploadsByDraft.set(
+  state.attachmentUploadsByDraft.set(
     targetDraftKey,
-    imageUploadsForDraft(targetDraftKey) + images.length,
+    attachmentUploadsForDraft(targetDraftKey) + attachments.length,
   );
   updateComposerControls();
   try {
     const results = [];
-    for (const image of images) {
+    for (const attachment of attachments) {
       try {
-        results.push({ status: "fulfilled", value: await uploadImage(image) });
+        results.push({ status: "fulfilled", value: await uploadAttachment(attachment) });
       } catch (reason) {
         results.push({ reason, status: "rejected" });
       }
@@ -1065,25 +1547,30 @@ async function uploadImages(files, targetDraftKey = draftKey()) {
       .filter((result) => result.status === "fulfilled")
       .map((result) => result.value);
     const failures = results.filter((result) => result.status === "rejected");
-    insertImagePaths(paths, targetDraftKey);
+    insertAttachmentPaths(paths, targetDraftKey);
     if (paths.length > 1) {
-      toast(`${paths.length.toLocaleString("fa-IR")} تصویر اضافه شد.`, "success");
+      toast(`${paths.length.toLocaleString("fa-IR")} فایل اضافه شد.`, "success");
+    } else if (paths.length === 1) {
+      toast("فایل اضافه شد.", "success");
     }
     if (failures.length) {
       const firstError = failures[0].reason?.message || "خطای نامشخص";
       const count = failures.length.toLocaleString("fa-IR");
       toast(
         failures.length === 1
-          ? `افزودن تصویر انجام نشد: ${firstError}`
-          : `افزودن ${count} تصویر انجام نشد: ${firstError}`,
+          ? `افزودن فایل انجام نشد: ${firstError}`
+          : `افزودن ${count} فایل انجام نشد: ${firstError}`,
         "error",
         { duration: 7000 },
       );
     }
   } finally {
-    const remaining = Math.max(0, imageUploadsForDraft(targetDraftKey) - images.length);
-    if (remaining) state.imageUploadsByDraft.set(targetDraftKey, remaining);
-    else state.imageUploadsByDraft.delete(targetDraftKey);
+    const remaining = Math.max(
+      0,
+      attachmentUploadsForDraft(targetDraftKey) - attachments.length,
+    );
+    if (remaining) state.attachmentUploadsByDraft.set(targetDraftKey, remaining);
+    else state.attachmentUploadsByDraft.delete(targetDraftKey);
     updateComposerControls();
   }
 }
@@ -1100,11 +1587,48 @@ function handlePromptPaste(event) {
   const targetDraftKey = draftKey();
   const plainText = event.clipboardData.getData("text/plain");
   if (plainText) insertPromptText(plainText);
-  void uploadImages(images, targetDraftKey);
+  void uploadAttachments(images, targetDraftKey);
 }
 
-function imageUploadsForDraft(key = draftKey()) {
-  return state.imageUploadsByDraft.get(key) || 0;
+function attachmentUploadsForDraft(key = draftKey()) {
+  return state.attachmentUploadsByDraft.get(key) || 0;
+}
+
+function dragCarriesFiles(event) {
+  return [...(event.dataTransfer?.types || [])].includes("Files");
+}
+
+function setComposerDropActive(active) {
+  elements.composer.classList.toggle("drop-active", active);
+  elements.composerDropOverlay.classList.toggle("hidden", !active);
+}
+
+function handleComposerDragEnter(event) {
+  if (!dragCarriesFiles(event)) return;
+  event.preventDefault();
+  setComposerDropActive(true);
+}
+
+function handleComposerDragOver(event) {
+  if (!dragCarriesFiles(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+}
+
+function handleComposerDragLeave(event) {
+  if (!dragCarriesFiles(event)) return;
+  if (event.relatedTarget && elements.composer.contains(event.relatedTarget)) return;
+  setComposerDropActive(false);
+}
+
+function handleComposerDrop(event) {
+  if (!dragCarriesFiles(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setComposerDropActive(false);
+  const files = [...(event.dataTransfer?.files || [])];
+  if (!files.length) return;
+  void uploadAttachments(files, draftKey());
 }
 
 function speechRecognitionConstructor() {
@@ -1215,8 +1739,8 @@ function toggleDictation() {
 }
 
 function updateComposerControls() {
-  const uploadingImages = imageUploadsForDraft();
-  const uploading = uploadingImages > 0;
+  const uploadingAttachments = attachmentUploadsForDraft();
+  const uploading = uploadingAttachments > 0;
   const text = elements.prompt.value.trim();
   const slash = parseSlashCommand(elements.prompt.value);
   const slashCanRun =
@@ -1241,9 +1765,9 @@ function updateComposerControls() {
   elements.imageInput.disabled = state.navigating || uploading;
   elements.composerTools.disabled = state.navigating;
   elements.dictate.disabled = state.navigating;
-  elements.uploadStatus.textContent = uploadingImages > 1
-    ? `در حال افزودن ${uploadingImages.toLocaleString("fa-IR")} تصویر…`
-    : "در حال افزودن تصویر…";
+  elements.uploadStatus.textContent = uploadingAttachments > 1
+    ? `در حال افزودن ${uploadingAttachments.toLocaleString("fa-IR")} فایل…`
+    : "در حال افزودن فایل…";
   elements.uploadStatus.classList.toggle("hidden", !uploading);
   updateComposerModeUi();
   updateSlashCommandMenu();
@@ -1253,14 +1777,21 @@ function updateAgentCopy(provider) {
   const label = providerLabel(provider);
   elements.prompt.placeholder = `پیام به ${label}…`;
   elements.prompt.setAttribute("aria-label", `پیام به ${label}`);
+  const project = currentProject();
+  if (project) {
+    elements.welcomeTitle.textContent = `در پروژهٔ «${project.name}» روی چی کار کنیم؟`;
+    elements.welcomeDescription.textContent =
+      "پوشه و دستورهای این پروژه برای گفتگوی تازه اعمال می‌شوند.";
+    return;
+  }
   if (provider === "claude") {
-    elements.welcomeTitle.textContent = "چه کاری را به Claude بسپاریم؟";
+    elements.welcomeTitle.textContent = "امروز چی رو به Claude بسپاریم؟";
     elements.welcomeDescription.textContent =
-      "پشت این صفحه Claude Code CLI اجرا می‌شود؛ با sessionها و permission mode خود Claude.";
+      "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی Claude پشت صحنه آماده‌اند.";
   } else {
-    elements.welcomeTitle.textContent = "چه کاری روی کد انجام دهیم؟";
+    elements.welcomeTitle.textContent = "امروز روی چی کار کنیم؟";
     elements.welcomeDescription.textContent =
-      "پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها، MCPها و دسترسی‌های ترمینال شما.";
+      "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.";
   }
 }
 
@@ -1387,8 +1918,13 @@ function updateSettingsUi() {
   state.models = state.modelsByProvider[provider] || [];
   const selectedModel = state.settings.modelByProvider[provider] || "";
   elements.cwdInput.value = state.settings.cwd;
-  elements.cwdLabel.textContent = shortPath(state.settings.cwd, 38);
-  elements.cwdLabel.title = state.settings.cwd;
+  const composerCwd = state.currentThreadId
+    ? state.threadRuntime.get(state.currentThreadId)?.cwd ||
+      state.currentThread?.cwd ||
+      state.settings.cwd
+    : currentProject()?.cwd || state.settings.cwd;
+  elements.cwdLabel.textContent = shortPath(composerCwd, 38);
+  elements.cwdLabel.title = composerCwd;
   elements.providerSelect.value = provider;
   renderModelOptions(state.models, selectedModel, provider);
   elements.effortSelect.value = state.settings.effort;
@@ -1396,6 +1932,10 @@ function updateSettingsUi() {
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
   elements.claudePermissionMode.value = state.settings.claudePermissionMode;
+  for (const input of document.querySelectorAll('input[name="accent-palette"]')) {
+    input.checked = input.value === state.settings.palette;
+  }
+  applyPalette(state.settings.palette);
   updateSettingsProviderUi(provider);
   updateModelLabel(provider);
 }
@@ -1437,12 +1977,18 @@ function saveSettings() {
       ...state.settings.modelByProvider,
       [provider]: elements.modelSelect.value,
     },
+    palette:
+      [...document.querySelectorAll('input[name="accent-palette"]')].find(
+        (input) => input.checked,
+      )?.value ||
+      defaultSettings.palette,
     personality: elements.personalitySelect.value,
     provider,
     sandbox: elements.sandboxSelect.value,
     sidebarCollapsed: state.settings.sidebarCollapsed,
   };
   persistSettings();
+  applyPalette(state.settings.palette);
   state.models = state.modelsByProvider[provider] || [];
   updateSettingsUi();
   updateConnection();
@@ -1473,6 +2019,323 @@ function threadDisplayTitle(thread) {
   const preview = thread.preview?.trim();
   if (preview) return preview.replace(/\s+/g, " ").slice(0, 70);
   return "گفتگوی بدون عنوان";
+}
+
+function projectById(projectId) {
+  return state.projects.find((project) => project.id === projectId) || null;
+}
+
+function projectIdFor(key = draftKey()) {
+  if (state.currentThreadId && key === state.currentThreadId) {
+    return state.threadProjects.get(state.currentThreadId) || null;
+  }
+  return state.draftProjects.get(key) || null;
+}
+
+function currentProject() {
+  return projectById(projectIdFor());
+}
+
+function projectInstructions(project, { includeResponseStyle = true } = {}) {
+  return [
+    includeResponseStyle ? RESPONSE_STYLE_INSTRUCTIONS : "",
+    project?.instructions
+      ? `Project instructions:\n${project.instructions}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function persistActiveProject() {
+  try {
+    if (state.activeProjectId) {
+      localStorage.setItem(ACTIVE_PROJECT_KEY, state.activeProjectId);
+    } else {
+      localStorage.removeItem(ACTIVE_PROJECT_KEY);
+    }
+  } catch {
+    // The project filter remains usable for this tab when storage is unavailable.
+  }
+}
+
+function updateProjectHeader() {
+  const project = currentProject();
+  elements.headerProjectLabel.textContent = project?.name || "پروژه";
+  elements.headerProject.classList.toggle("assigned", Boolean(project));
+  elements.headerProject.title = project
+    ? `پروژه: ${project.name}`
+    : "افزودن گفتگو به پروژه";
+  elements.shareChat.disabled = !state.currentThreadId;
+}
+
+function renderProjects() {
+  elements.projectList.replaceChildren();
+  elements.projectAll.classList.toggle("active", !state.activeProjectId);
+  const counts = new Map();
+  for (const projectId of state.threadProjects.values()) {
+    counts.set(projectId, (counts.get(projectId) || 0) + 1);
+  }
+  for (const project of state.projects) {
+    const row = document.createElement("div");
+    row.className = "project-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `project-item ${
+      project.id === state.activeProjectId ? "active" : ""
+    }`;
+    button.dataset.projectId = project.id;
+    button.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /></svg>
+    `;
+    const name = document.createElement("span");
+    name.className = "project-item-name";
+    name.dir = "auto";
+    name.textContent = project.name;
+    const count = document.createElement("span");
+    count.className = "project-item-count";
+    count.textContent = (counts.get(project.id) || 0).toLocaleString("fa-IR");
+    button.append(name, count);
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "project-item-edit";
+    edit.dataset.projectEdit = project.id;
+    edit.setAttribute("aria-label", `ویرایش پروژهٔ ${project.name}`);
+    edit.title = "ویرایش پروژه";
+    edit.textContent = "⋯";
+    row.append(button, edit);
+    elements.projectList.append(row);
+  }
+  updateProjectHeader();
+}
+
+async function loadProjects() {
+  let result;
+  try {
+    result = await api("/api/projects", { headers: {} });
+  } catch (error) {
+    if (error.status && error.status !== 404) {
+      console.warn("Project metadata is unavailable", error);
+    }
+    state.projects = [];
+    state.threadProjects = new Map();
+    state.activeProjectId = null;
+    renderProjects();
+    return;
+  }
+  state.projects = Array.isArray(result.projects) ? result.projects : [];
+  state.threadProjects = new Map(Object.entries(result.threadProjects || {}));
+  if (state.activeProjectId && !projectById(state.activeProjectId)) {
+    state.activeProjectId = null;
+    persistActiveProject();
+  }
+  renderProjects();
+  renderThreadList();
+  updateSettingsUi();
+}
+
+function openProjectDialog(project = null) {
+  elements.projectId.value = project?.id || "";
+  elements.projectName.value = project?.name || "";
+  elements.projectCwd.value = project?.cwd || currentProject()?.cwd || state.settings.cwd;
+  elements.projectInstructions.value = project?.instructions || "";
+  elements.projectDialogTitle.textContent = project ? "ویرایش پروژه" : "پروژهٔ تازه";
+  elements.projectDelete.classList.toggle("hidden", !project);
+  elements.projectDialog.showModal();
+  setTimeout(() => elements.projectName.focus(), 0);
+}
+
+async function saveProject(event) {
+  event.preventDefault();
+  const projectId = elements.projectId.value;
+  const body = {
+    name: elements.projectName.value.trim(),
+    cwd: elements.projectCwd.value.trim(),
+    instructions: elements.projectInstructions.value.trim(),
+  };
+  if (!body.name || !body.cwd) return;
+  elements.projectSave.disabled = true;
+  try {
+    const result = await api(projectId ? `/api/projects/${projectId}` : "/api/projects", {
+      method: projectId ? "PATCH" : "POST",
+      body: JSON.stringify(body),
+    });
+    elements.projectDialog.close();
+    await loadProjects();
+    if (!projectId) selectProject(result.project.id);
+    else updateProjectHeader();
+  } catch (error) {
+    showError(error, projectId ? "ویرایش پروژه" : "ساخت پروژه");
+  } finally {
+    elements.projectSave.disabled = false;
+  }
+}
+
+async function deleteProject() {
+  const projectId = elements.projectId.value;
+  const project = projectById(projectId);
+  if (!project || !window.confirm(`پروژهٔ «${project.name}» حذف شود؟ گفتگوها حذف نمی‌شوند.`)) {
+    return;
+  }
+  elements.projectDelete.disabled = true;
+  try {
+    await api(`/api/projects/${projectId}`, { method: "DELETE" });
+    elements.projectDialog.close();
+    if (state.activeProjectId === projectId) {
+      state.activeProjectId = null;
+      persistActiveProject();
+    }
+    await loadProjects();
+    updateProjectHeader();
+  } catch (error) {
+    showError(error, "حذف پروژه");
+  } finally {
+    elements.projectDelete.disabled = false;
+  }
+}
+
+function selectProject(projectId) {
+  const nextProjectId = projectId && projectById(projectId) ? projectId : null;
+  state.activeProjectId = nextProjectId;
+  persistActiveProject();
+  renderProjects();
+  renderThreadList();
+  const currentMatches =
+    state.currentThreadId &&
+    (state.threadProjects.get(state.currentThreadId) || null) === nextProjectId;
+  if (nextProjectId && !currentMatches) newChat({ projectId: nextProjectId });
+  else closeSidebar();
+}
+
+function renderAssignProjectOptions() {
+  elements.assignProjectOptions.replaceChildren();
+  const assignedId = projectIdFor();
+  const options = [
+    { id: "", name: "بدون پروژه", cwd: "در فهرست عمومی گفتگوها" },
+    ...state.projects,
+  ];
+  for (const project of options) {
+    const label = document.createElement("label");
+    label.className = "assign-project-option";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "assigned-project";
+    input.value = project.id;
+    input.checked = project.id === (assignedId || "");
+    const copy = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = project.name;
+    const cwd = document.createElement("small");
+    cwd.textContent = project.cwd;
+    copy.append(name, cwd);
+    label.append(input, copy);
+    elements.assignProjectOptions.append(label);
+  }
+}
+
+function openAssignProjectDialog() {
+  renderAssignProjectOptions();
+  elements.assignProjectDialog.showModal();
+}
+
+async function saveProjectAssignment(event) {
+  event.preventDefault();
+  const selected = elements.assignProjectOptions.querySelector(
+    'input[name="assigned-project"]:checked',
+  );
+  const projectId = selected?.value || null;
+  elements.assignProjectSave.disabled = true;
+  try {
+    if (state.currentThreadId) {
+      await api("/api/project-threads", {
+        method: "POST",
+        body: JSON.stringify({ threadId: state.currentThreadId, projectId }),
+      });
+      if (projectId) state.threadProjects.set(state.currentThreadId, projectId);
+      else state.threadProjects.delete(state.currentThreadId);
+    } else {
+      const key = draftKey();
+      if (projectId) state.draftProjects.set(key, projectId);
+      else state.draftProjects.delete(key);
+    }
+    elements.assignProjectDialog.close();
+    renderProjects();
+    renderThreadList();
+    updateProjectHeader();
+  } catch (error) {
+    showError(error, "تغییر پروژهٔ گفتگو");
+  } finally {
+    elements.assignProjectSave.disabled = false;
+  }
+}
+
+function showShare(share) {
+  const link = new URL(`/share/${share.id}`, window.location.href).href;
+  elements.shareDialog.dataset.shareId = share.id;
+  elements.shareLink.value = link;
+  elements.shareRevoke.classList.remove("hidden");
+  if (!elements.shareDialog.open) elements.shareDialog.showModal();
+}
+
+async function refreshShare({ open = true } = {}) {
+  if (!state.currentThreadId) return;
+  elements.shareChat.disabled = true;
+  elements.shareRefresh.disabled = true;
+  try {
+    let share = null;
+    if (open) {
+      const existing = await api(
+        `/api/shares?threadId=${encodeURIComponent(state.currentThreadId)}`,
+        { headers: {} },
+      );
+      share = existing.share;
+    }
+    if (!share) {
+      const result = await api("/api/shares", {
+        method: "POST",
+        body: JSON.stringify({ threadId: state.currentThreadId }),
+      });
+      share = result.share;
+    }
+    showShare(share);
+    if (!open) toast("نسخهٔ اشتراکی به‌روز شد.", "success");
+  } catch (error) {
+    showError(error, "اشتراک گفتگو");
+  } finally {
+    elements.shareChat.disabled = !state.currentThreadId;
+    elements.shareRefresh.disabled = false;
+  }
+}
+
+async function copyShareLink() {
+  const link = elements.shareLink.value;
+  if (!link) return;
+  try {
+    await navigator.clipboard.writeText(link);
+    const previous = elements.shareCopy.textContent;
+    elements.shareCopy.textContent = "کپی شد";
+    setTimeout(() => (elements.shareCopy.textContent = previous), 1200);
+  } catch {
+    elements.shareLink.select();
+    toast("لینک را از فیلد بالا کپی کنید.", "warning");
+  }
+}
+
+async function revokeShare() {
+  const shareId = elements.shareDialog.dataset.shareId;
+  if (!shareId || !window.confirm("این لینک اشتراک غیرفعال شود؟")) return;
+  elements.shareRevoke.disabled = true;
+  try {
+    await api(`/api/shares/${shareId}`, { method: "DELETE" });
+    elements.shareDialog.close();
+    elements.shareDialog.dataset.shareId = "";
+    elements.shareLink.value = "";
+    toast("لینک اشتراک لغو شد.", "success");
+  } catch (error) {
+    showError(error, "لغو لینک اشتراک");
+  } finally {
+    elements.shareRevoke.disabled = false;
+  }
 }
 
 function threadById(threadId) {
@@ -1720,15 +2583,22 @@ function announceThreadCompletion(threadId, status) {
 
 function renderThreadList() {
   elements.threadList.replaceChildren();
-  if (!state.threads.length) {
+  const threads = state.activeProjectId
+    ? state.threads.filter(
+        (thread) => state.threadProjects.get(thread.id) === state.activeProjectId,
+      )
+    : state.threads;
+  if (!threads.length) {
     const empty = document.createElement("div");
     empty.className = "thread-empty";
-    empty.textContent = "هنوز گفتگویی پیدا نشد.";
+    empty.textContent = state.activeProjectId
+      ? "هنوز گفتگویی در این پروژه نیست."
+      : "هنوز گفتگویی پیدا نشد.";
     elements.threadList.append(empty);
     return;
   }
 
-  for (const thread of state.threads) {
+  for (const thread of threads) {
     const button = document.createElement("button");
     button.className = `thread-item ${thread.id === state.currentThreadId ? "active" : ""}`;
     button.dataset.threadId = thread.id;
@@ -1805,6 +2675,7 @@ function clearConversation() {
   elements.nextUserMessage.disabled = true;
   elements.userMessageNavigationStatus.textContent = "";
   state.itemViews.clear();
+  state.turnProcessViews.clear();
   elements.messages.replaceChildren();
 }
 
@@ -2226,7 +3097,7 @@ async function processNextQueuedPrompt(threadId) {
     state.navigating ||
     !state.connected ||
     state.pendingTurnStarts > 0 ||
-    imageUploadsForDraft(threadId) > 0
+    attachmentUploadsForDraft(threadId) > 0
   ) {
     return false;
   }
@@ -2390,9 +3261,13 @@ function restoreCurrentViewUrl() {
   }
 }
 
-function newChat({ draftId = null, historyMode = "push" } = {}) {
-  if (!state.currentThreadId && imageUploadsForDraft() > 0) {
-    toast("برای حفظ تصاویر این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
+function newChat({
+  draftId = null,
+  historyMode = "push",
+  projectId = state.activeProjectId,
+} = {}) {
+  if (!state.currentThreadId && attachmentUploadsForDraft() > 0) {
+    toast("برای حفظ فایل‌های این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
     if (historyMode === "none") restoreCurrentViewUrl();
     return false;
   }
@@ -2405,16 +3280,30 @@ function newChat({ draftId = null, historyMode = "push" } = {}) {
   state.currentThreadId = null;
   state.currentTurnId = null;
   state.newDraftId = draftId || crypto.randomUUID();
+  if (projectId && projectById(projectId)) {
+    state.draftProjects.set(draftKey(), projectId);
+  } else {
+    state.draftProjects.delete(draftKey());
+  }
   setNavigating(false);
   setBusy(false);
   clearConversation();
   elements.welcome.classList.remove("hidden");
+  const project = currentProject();
+  elements.welcomeTitle.textContent = project
+    ? `در پروژهٔ «${project.name}» روی چی کار کنیم؟`
+    : "امروز روی چی کار کنیم؟";
+  elements.welcomeDescription.textContent = project
+    ? "پوشه و دستورهای این پروژه برای گفتگوی تازه اعمال می‌شوند."
+    : "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.";
   elements.threadTitle.textContent = "گفتگوی تازه";
   elements.threadMeta.textContent = "";
   updateThreadUrl(null, historyMode, state.newDraftId);
   restoreDraft(null);
   renderThreadList();
   updateAttentionUi();
+  updateProjectHeader();
+  updateSettingsUi();
   updateConnection();
   closeSidebar();
   elements.prompt.focus();
@@ -2450,6 +3339,8 @@ function setCurrentThread(thread, metadata = {}) {
   restoreDraft(thread.id);
   renderThreadList();
   activateThreadInteractions(thread.id);
+  updateProjectHeader();
+  updateSettingsUi();
   updateConnection();
   void loadGoal(thread.id);
 }
@@ -2488,10 +3379,85 @@ function createAssistantMessageActions() {
   return actions;
 }
 
+function isCommentaryItem(item) {
+  return item.type === "agentMessage" && item.phase === "commentary";
+}
+
+function processViewKey(turnId, itemId = "") {
+  return turnId || `item:${itemId}`;
+}
+
+function setTurnProcessState(view, running, { autoOpen = false } = {}) {
+  view.running = running;
+  view.element.classList.toggle("running", running);
+  view.element.classList.toggle("completed", !running);
+  view.element.setAttribute("aria-busy", String(running));
+  if (autoOpen && running) view.element.open = true;
+  if (!running) view.element.open = false;
+
+  const icon = document.createElement("span");
+  icon.className = "turn-process-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = running ? "✦" : "✓";
+  const label = document.createElement("span");
+  label.className = "turn-process-label";
+  label.textContent = running ? "در حال انجام کار" : "روند کار";
+  view.summary.replaceChildren(icon, label);
+
+  if (!running) return;
+  const dots = document.createElement("span");
+  dots.className = "thinking-dots";
+  dots.setAttribute("aria-hidden", "true");
+  for (let index = 0; index < 3; index += 1) dots.append(document.createElement("span"));
+  view.summary.append(dots);
+}
+
+function ensureTurnProcessView(turnId, itemId, running = false) {
+  const key = processViewKey(turnId, itemId);
+  let view = state.turnProcessViews.get(key);
+  if (view) {
+    if (running && !view.running) setTurnProcessState(view, true);
+    return view;
+  }
+
+  const element = document.createElement("details");
+  element.className = "turn-process";
+  element.dataset.turnId = turnId || "";
+  const summary = document.createElement("summary");
+  const content = document.createElement("div");
+  content.className = "turn-process-content";
+  element.append(summary, content);
+  elements.messages.append(element);
+  view = { content, element, key, running, summary };
+  state.turnProcessViews.set(key, view);
+  setTurnProcessState(view, running, { autoOpen: true });
+  return view;
+}
+
+function completeTurnProcess(turnId) {
+  if (!turnId) return;
+  const view = state.turnProcessViews.get(turnId);
+  if (view) setTurnProcessState(view, false);
+}
+
+function removeItemViewElement(view) {
+  const processView = view.processView;
+  view.element.remove();
+  if (processView && !processView.content.childElementCount) {
+    processView.element.remove();
+    state.turnProcessViews.delete(processView.key);
+  }
+}
+
 function createMessageView(item) {
   const role = item.type === "userMessage" ? "user" : "assistant";
   const row = document.createElement("article");
   row.className = `message-row ${role}`;
+  if (role === "assistant") {
+    row.classList.add("final-answer");
+    row.dataset.phase = item.phase || "final_answer";
+    row.setAttribute("aria-label", "پاسخ نهایی");
+  }
   row.dataset.itemId = item.id;
 
   const body = document.createElement("div");
@@ -2504,7 +3470,7 @@ function createMessageView(item) {
   row.append(body);
   elements.messages.append(row);
   if (role === "user") scheduleUserMessageNavigationUpdate();
-  return { content, element: row, text: "", type: item.type };
+  return { content, element: row, kind: "message", text: "", type: item.type };
 }
 
 function activityTitle(item) {
@@ -2529,7 +3495,28 @@ function activityTitle(item) {
   return titles[item.type] || item.type || "فعالیت";
 }
 
-function createActivityView(item) {
+function createCommentaryView(item, turnId, phase) {
+  const processView = ensureTurnProcessView(turnId, item.id, phase !== "completed");
+  const element = document.createElement("section");
+  element.className = "turn-process-update";
+  element.dataset.itemId = item.id;
+  const content = document.createElement("div");
+  content.className = "turn-process-message";
+  content.dir = "auto";
+  element.append(content);
+  processView.content.append(element);
+  return {
+    content,
+    element,
+    kind: "commentary",
+    processView,
+    text: "",
+    type: item.type,
+  };
+}
+
+function createActivityView(item, turnId, phase = "completed") {
+  const processView = ensureTurnProcessView(turnId, item.id, phase !== "completed");
   const details = document.createElement("details");
   details.className = `activity-card activity-${item.type.replace(/[^a-z0-9_-]/gi, "-")}`;
   details.dataset.itemId = item.id;
@@ -2547,8 +3534,16 @@ function createActivityView(item) {
   const content = document.createElement("div");
   content.className = "activity-content";
   details.append(summary, content);
-  elements.messages.append(details);
-  return { content, element: details, summary, text: "", type: item.type };
+  processView.content.append(details);
+  return {
+    content,
+    element: details,
+    kind: "activity",
+    processView,
+    summary,
+    text: "",
+    type: item.type,
+  };
 }
 
 function formatChanges(changes) {
@@ -2646,6 +3641,8 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
     running,
   );
 }
+
+applyPalette(state.settings.palette);
 
 function updateCompaction(view, phase) {
   const running = phase !== "completed";
@@ -2750,22 +3747,42 @@ function reconcileOptimisticUserMessage(item, existingView) {
   return optimisticView;
 }
 
-function renderItem(item, phase = "completed") {
+function renderItem(item, phase = "completed", turnId = null) {
   if (!item?.id || !item.type) return null;
   let view = state.itemViews.get(item.id);
   if (item.type === "userMessage" && item.clientId) {
     view = reconcileOptimisticUserMessage(item, view);
   }
-  const isMessage = item.type === "userMessage" || item.type === "agentMessage";
+  const commentary = isCommentaryItem(item);
+  const isMessage = item.type === "userMessage" || (item.type === "agentMessage" && !commentary);
+  const kind = commentary ? "commentary" : isMessage ? "message" : "activity";
+  let previousText = "";
+  if (view && view.kind !== kind) {
+    previousText = view.text || "";
+    removeItemViewElement(view);
+    state.itemViews.delete(item.id);
+    view = null;
+  }
   if (!view) {
-    view = isMessage ? createMessageView(item) : createActivityView(item);
+    view = commentary
+      ? createCommentaryView(item, turnId, phase)
+      : isMessage
+        ? createMessageView(item)
+        : createActivityView(item, turnId, phase);
+    view.text = previousText;
     state.itemViews.set(item.id, view);
   }
 
-  if (isMessage) {
+  if (commentary) {
+    view.text = itemText(item) || view.text;
+    view.content.innerHTML = markdown(view.text);
+  } else if (isMessage) {
     view.text = itemText(item) || view.text;
     view.content.innerHTML = markdown(view.text);
     view.content.classList.toggle("streaming-cursor", phase === "started" && item.type === "agentMessage");
+    if (item.type === "agentMessage" && item.phase === "final_answer") {
+      completeTurnProcess(turnId);
+    }
   } else {
     updateActivity(view, item, phase);
   }
@@ -2838,7 +3855,13 @@ function renderHistory(thread) {
   let activeTurn = null;
   const inProgressTurns = [];
   for (const turn of thread.turns || []) {
-    for (const item of turn.items || []) renderItem(item, "completed");
+    for (const item of turn.items || []) renderItem(item, "completed", turn.id);
+    const processView = state.turnProcessViews.get(turn.id);
+    if (processView) {
+      setTurnProcessState(processView, turn.status === "inProgress", {
+        autoOpen: turn.status === "inProgress",
+      });
+    }
     if (turn.status === "inProgress") {
       inProgressTurns.push(turn);
       if (!state.completedTurns.has(turnEventKey(thread.id, turn.id))) {
@@ -2876,8 +3899,8 @@ function renderHistory(thread) {
 
 async function openThread(threadId, { historyMode = "push" } = {}) {
   if (!threadId) return false;
-  if (!state.currentThreadId && imageUploadsForDraft() > 0) {
-    toast("برای حفظ تصاویر این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
+  if (!state.currentThreadId && attachmentUploadsForDraft() > 0) {
+    toast("برای حفظ فایل‌های این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
     if (historyMode === "none") restoreCurrentViewUrl();
     return false;
   }
@@ -3135,21 +4158,36 @@ function navigateToUserMessage(direction) {
   scheduleUserMessageNavigationUpdate();
 }
 
-function appendDelta(itemId, delta, kind) {
+function appendDelta(itemId, delta, kind, turnId = null, itemPhase = null) {
   let view = state.itemViews.get(itemId);
   if (!view) {
     const item =
       kind === "agent"
-        ? { id: itemId, type: "agentMessage", text: "" }
-        : { id: itemId, type: kind === "reasoning" ? "reasoning" : "commandExecution" };
-    view = renderItem(item, "started");
+        ? { id: itemId, phase: itemPhase, type: "agentMessage", text: "" }
+        : {
+            id: itemId,
+            type:
+              kind === "reasoning"
+                ? "reasoning"
+                : kind === "file"
+                  ? "fileChange"
+                  : "commandExecution",
+          };
+    view = renderItem(item, "started", turnId);
   }
   if (!view) return;
 
   if (kind === "agent") {
     view.text += delta;
     view.content.innerHTML = markdown(view.text);
-    view.content.classList.add("streaming-cursor");
+    if (view.kind === "commentary") {
+      view.content.classList.remove("streaming-cursor");
+      if (view.processView && !view.processView.running) {
+        setTurnProcessState(view.processView, true);
+      }
+    } else {
+      view.content.classList.add("streaming-cursor");
+    }
   } else if (kind === "reasoning") {
     view.text += delta;
     updateReasoning(view, {}, "started");
@@ -3175,7 +4213,7 @@ function renderPlan(params) {
   const id = `plan-${params.turnId}`;
   let view = state.itemViews.get(id);
   if (!view) {
-    view = createActivityView({ id, type: "plan" });
+    view = createActivityView({ id, type: "plan" }, params.turnId, "started");
     view.element.open = false;
     state.itemViews.set(id, view);
   }
@@ -3199,14 +4237,18 @@ function renderPlan(params) {
 
 async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
   if (sourceThreadId) return sourceThreadId;
+  const projectId = state.draftProjects.get(sourceDraftKey) || null;
+  const project = projectById(projectId);
+  const planMode = composerModeFor(sourceDraftKey) === "plan";
   const params = {
-    cwd: state.settings.cwd,
+    cwd: project?.cwd || state.settings.cwd,
     provider: state.settings.provider,
   };
   if (state.settings.provider === "codex") {
-    if (composerModeFor(sourceDraftKey) !== "plan") {
-      params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
-    }
+    const instructions = projectInstructions(project, {
+      includeResponseStyle: !planMode,
+    });
+    if (instructions) params.developerInstructions = instructions;
     if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
     if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
     if (state.settings.personality) params.personality = state.settings.personality;
@@ -3217,6 +4259,18 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
     params.permissionMode = state.settings.claudePermissionMode;
   }
   const result = await rpc("thread/start", params);
+  if (projectId) {
+    try {
+      await api("/api/project-threads", {
+        method: "POST",
+        body: JSON.stringify({ threadId: result.thread.id, projectId }),
+      });
+      state.threadProjects.set(result.thread.id, projectId);
+    } catch (error) {
+      showError(error, "افزودن گفتگوی تازه به پروژه");
+    }
+  }
+  state.draftProjects.delete(sourceDraftKey);
   state.threadsRefreshVersion += 1;
   if (!state.threads.some((thread) => thread.id === result.thread.id)) {
     state.threads.unshift(result.thread);
@@ -3254,7 +4308,7 @@ async function sendPrompt(
   }
   text = String(text || "").trim();
   const input = text ? [{ type: "text", text }] : [];
-  if (!input.length || !state.connected || state.navigating || imageUploadsForDraft() > 0) {
+  if (!input.length || !state.connected || state.navigating || attachmentUploadsForDraft() > 0) {
     return false;
   }
   if (state.busy) {
@@ -3310,8 +4364,12 @@ async function sendPrompt(
       }
       params.collaborationMode = collaborationMode;
     }
-    if (provider === "codex" && !params.collaborationMode) {
-      params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
+    if (provider === "codex") {
+      const project = projectById(state.threadProjects.get(threadId));
+      const instructions = projectInstructions(project, {
+        includeResponseStyle: !params.collaborationMode,
+      });
+      if (instructions) params.developerInstructions = instructions;
     }
     if (
       state.settings.effort &&
@@ -3439,6 +4497,13 @@ function finishVisibleTurn(turn) {
     view.content?.classList.remove("streaming-cursor");
     view.element?.classList.remove("running");
   }
+  if (turn?.id && state.turnProcessViews.has(turn.id)) {
+    completeTurnProcess(turn.id);
+  } else {
+    for (const processView of state.turnProcessViews.values()) {
+      if (processView.running) setTurnProcessState(processView, false);
+    }
+  }
   if (turn?.status === "failed") {
     appendTurnError(turn.error?.message || "اجرای turn ناموفق بود.");
   }
@@ -3457,23 +4522,23 @@ function renderThreadEvent(message) {
   const { method, params = {} } = message;
   switch (method) {
     case "item/started":
-      renderItem(params.item, "started");
+      renderItem(params.item, "started", params.turnId);
       break;
     case "item/completed":
-      renderItem(params.item, "completed");
+      renderItem(params.item, "completed", params.turnId);
       break;
     case "item/agentMessage/delta":
-      appendDelta(params.itemId, params.delta || "", "agent");
+      appendDelta(params.itemId, params.delta || "", "agent", params.turnId, params.phase);
       break;
     case "item/reasoning/summaryTextDelta":
     case "item/reasoning/textDelta":
-      appendDelta(params.itemId, params.delta || "", "reasoning");
+      appendDelta(params.itemId, params.delta || "", "reasoning", params.turnId);
       break;
     case "item/commandExecution/outputDelta":
-      appendDelta(params.itemId, params.delta || "", "command");
+      appendDelta(params.itemId, params.delta || "", "command", params.turnId);
       break;
     case "item/fileChange/outputDelta":
-      appendDelta(params.itemId, params.delta || "", "file");
+      appendDelta(params.itemId, params.delta || "", "file", params.turnId);
       break;
     case "turn/plan/updated":
       renderPlan(params);
@@ -3512,8 +4577,14 @@ function handleNotification(message) {
     return;
   }
 
+  if (method === "account/rateLimits/updated") {
+    applyRateLimits(params, { notify: true });
+    return;
+  }
+
   if (method === "thread/tokenUsage/updated" && threadId) {
     state.threadTokenUsage.set(threadId, params.tokenUsage || null);
+    if (threadId === state.currentThreadId) renderContextUsage();
     return;
   }
 
@@ -3603,6 +4674,7 @@ function handleNotification(message) {
   }
 
   if (method === "turn/completed" && threadId) {
+    void refreshRateLimits({ silent: true });
     const turn = params.turn || {};
     const turnId = turn.id || "unknown";
     const key = turnEventKey(threadId, turnId);
@@ -4426,6 +5498,10 @@ elements.prompt.addEventListener("keyup", (event) => {
   }
 });
 elements.prompt.addEventListener("paste", handlePromptPaste);
+elements.composer.addEventListener("dragenter", handleComposerDragEnter);
+elements.composer.addEventListener("dragover", handleComposerDragOver);
+elements.composer.addEventListener("dragleave", handleComposerDragLeave);
+elements.composer.addEventListener("drop", handleComposerDrop);
 elements.addImages.addEventListener("click", () => elements.imageInput.click());
 elements.composerTools.addEventListener("click", toggleComposerToolsMenu);
 elements.planModeOption.addEventListener("click", togglePlanMode);
@@ -4441,7 +5517,7 @@ elements.imageInput.addEventListener("change", () => {
   const files = [...elements.imageInput.files];
   const targetDraftKey = draftKey();
   elements.imageInput.value = "";
-  void uploadImages(files, targetDraftKey);
+  void uploadAttachments(files, targetDraftKey);
 });
 elements.conversation.addEventListener(
   "scroll",
@@ -4543,6 +5619,17 @@ elements.promptQueueItems.addEventListener("click", (event) => {
 elements.promptQueueClear.addEventListener("click", clearPromptQueue);
 elements.stopTurn.addEventListener("click", stopTurn);
 elements.newChat.addEventListener("click", () => newChat());
+elements.projectAdd.addEventListener("click", () => openProjectDialog());
+elements.projectAll.addEventListener("click", () => selectProject(null));
+elements.projectList.addEventListener("click", (event) => {
+  const edit = event.target.closest("[data-project-edit]");
+  if (edit) {
+    openProjectDialog(projectById(edit.dataset.projectEdit));
+    return;
+  }
+  const project = event.target.closest("[data-project-id]");
+  if (project) selectProject(project.dataset.projectId);
+});
 elements.threadList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-thread-id]");
   if (button) openThread(button.dataset.threadId);
@@ -4553,6 +5640,32 @@ elements.threadSearch.addEventListener("input", () => {
 });
 elements.openSettings.addEventListener("click", () => openSettings());
 elements.headerSettings.addEventListener("click", () => openSettings());
+elements.usageButton.addEventListener("click", openUsageDialog);
+elements.usageClose.addEventListener("click", closeUsageDialog);
+elements.usageRefresh.addEventListener("click", () =>
+  refreshRateLimits({ force: true }),
+);
+elements.usageDialog.addEventListener("close", () => {
+  clearInterval(state.usageClockTimer);
+  state.usageClockTimer = null;
+});
+elements.headerProject.addEventListener("click", openAssignProjectDialog);
+elements.shareChat.addEventListener("click", () => refreshShare());
+elements.projectForm.addEventListener("submit", saveProject);
+elements.projectCancel.addEventListener("click", () => elements.projectDialog.close());
+elements.projectDialogClose.addEventListener("click", () => elements.projectDialog.close());
+elements.projectDelete.addEventListener("click", deleteProject);
+elements.assignProjectForm.addEventListener("submit", saveProjectAssignment);
+elements.assignProjectCancel.addEventListener("click", () =>
+  elements.assignProjectDialog.close(),
+);
+elements.assignProjectClose.addEventListener("click", () =>
+  elements.assignProjectDialog.close(),
+);
+elements.shareDialogClose.addEventListener("click", () => elements.shareDialog.close());
+elements.shareCopy.addEventListener("click", copyShareLink);
+elements.shareRefresh.addEventListener("click", () => refreshShare({ open: false }));
+elements.shareRevoke.addEventListener("click", revokeShare);
 elements.cwdChip.addEventListener("click", () => openSettings());
 elements.saveSettings.addEventListener("click", (event) => {
   event.preventDefault();
@@ -4562,6 +5675,15 @@ elements.settingsForm.addEventListener("submit", (event) => event.preventDefault
 elements.settingsCancel.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsClose.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsDialog.addEventListener("close", updateSettingsUi);
+for (const input of document.querySelectorAll('input[name="accent-palette"]')) {
+  input.addEventListener("change", () => {
+    if (!input.checked) return;
+    for (const candidate of document.querySelectorAll('input[name="accent-palette"]')) {
+      candidate.checked = candidate === input;
+    }
+    applyPalette(input.value);
+  });
+}
 elements.providerSelect.addEventListener("change", () => {
   const provider = elements.providerSelect.value;
   updateSettingsProviderUi(provider);
@@ -4649,9 +5771,14 @@ window.addEventListener("popstate", (event) => {
   });
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && state.currentThreadId) {
-    markThreadSeen(state.currentThreadId);
-    renderThreadList();
+  if (!document.hidden) {
+    if (state.currentThreadId) {
+      markThreadSeen(state.currentThreadId);
+      renderThreadList();
+    }
+    if (Date.now() - state.rateLimitsFetchedAt > 5 * 60_000) {
+      void refreshRateLimits({ silent: true });
+    }
   }
 });
 elements.messages.addEventListener("click", async (event) => {
@@ -4714,11 +5841,13 @@ async function initialize() {
       updateSettingsUi();
     }
     applyProviderStatusPayload(status);
+    await loadProjects();
     await Promise.allSettled([
       loadModels(),
       loadCollaborationModes(),
       refreshThreads(),
       hydrateThreadFromUrl(),
+      refreshRateLimits({ force: true, silent: true }),
     ]);
   } catch (error) {
     markProviderConnectionsUnavailable("سرور در دسترس نیست");

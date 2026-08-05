@@ -99,6 +99,8 @@ test("CLI exposes help and version without starting the server", async () => {
   assert.equal((await once(help, "exit"))[0], 0);
   assert.match(helpOutput, /Usage:\s+codex-web/);
   assert.match(helpOutput, /always listens on 127\.0\.0\.1/);
+  assert.match(helpOutput, /--remote\s+Share privately through Tailscale Serve/);
+  assert.match(helpOutput, /CODEX_WEB_REMOTE_PORT/);
 });
 
 test("server starts with a fake Codex bridge and enforces local security boundaries", async (t) => {
@@ -178,6 +180,22 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   assert.equal(upload.path.startsWith(join(cacheHome, "codex-web", "uploads")), true);
   assert.deepEqual(await readFile(upload.path), png);
   assert.equal((await stat(upload.path)).mode & 0o777, 0o600);
+
+  const markdownFile = Buffer.from("# dropped notes\n", "utf8");
+  const fileUploadResponse = await fetch(`${baseUrl}/api/uploads/files`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "text/markdown",
+      "X-File-Name": encodeURIComponent("یادداشت‌ها.md"),
+    },
+    body: markdownFile,
+  });
+  assert.equal(fileUploadResponse.status, 201);
+  const fileUpload = await fileUploadResponse.json();
+  assert.equal(fileUpload.path.startsWith(join(cacheHome, "codex-web", "uploads")), true);
+  assert.equal(fileUpload.path.endsWith(".md"), true);
+  assert.deepEqual(await readFile(fileUpload.path), markdownFile);
+  assert.equal((await stat(fileUpload.path)).mode & 0o777, 0o600);
 
   const invalidUploadResponse = await fetch(`${baseUrl}/api/uploads/images`, {
     method: "POST",

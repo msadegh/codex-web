@@ -553,7 +553,7 @@ test(
     assert.equal(finalUrl.hash, "#composer");
     assert.match(
       threadStarts[0].developerInstructions,
-      /Turn list-like prose into real lists/,
+      /use a compact Markdown table by default/,
     );
   },
 );
@@ -679,28 +679,34 @@ test("plan step text can shrink and wrap unbroken paths on narrow viewports", as
   assert.match(rule, /overflow-wrap:\s*anywhere/);
 });
 
-test("feature UI preserves the original Codex Web theme and conversation dimensions", async () => {
-  const [app, index, styles] = await Promise.all([
-    readFile(APP, "utf8"),
-    readFile(INDEX, "utf8"),
-    readFile(STYLES, "utf8"),
-  ]);
+test("conversation typography keeps ChatGPT-like readable dimensions and black canvas", async () => {
+  const styles = await readFile(STYLES, "utf8");
   const root = styles.match(/:root\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const page = styles.match(/html,\s*body\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const assistant =
+    styles.match(/\.assistant \.message-content\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const messages = styles.match(/\.messages\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
   const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const headings =
+    styles.match(
+      /\.message-content h1,\s*\.message-content h2,\s*\.message-content h3\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body || "";
+  const listMarker =
+    styles.match(/\.message-content li::marker\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
 
-  assert.match(root, /--bg:\s*#0d0f0d/);
-  assert.match(root, /--panel:\s*#121512/);
-  assert.match(root, /--text:\s*#f1f4ed/);
-  assert.match(root, /--accent:\s*#d8ff6b/);
-  assert.match(page, /font-size:\s*15px/);
-  assert.match(page, /line-height:\s*1\.65/);
-  assert.match(messages, /width:\s*min\(860px,/);
-  assert.match(composer, /width:\s*min\(850px,/);
-  assert.doesNotMatch(styles, /data-palette|--neon-gradient|--violet/);
-  assert.doesNotMatch(index, /accent-palette|palette-field/);
-  assert.doesNotMatch(app, /applyPalette|ACCENT_PALETTES/);
+  assert.match(root, /--bg:\s*#000(?:000)?/);
+  assert.match(root, /--panel:\s*#0d0d0d/);
+  assert.match(root, /--text:\s*#ececec/);
+  assert.match(page, /font-size:\s*16px/);
+  assert.match(page, /line-height:\s*1\.75/);
+  assert.match(assistant, /font-size:\s*1rem/);
+  assert.match(assistant, /line-height:\s*1\.625/);
+  assert.match(messages, /width:\s*min\(48rem,/);
+  assert.match(composer, /width:\s*min\(48rem,/);
+  assert.match(headings, /font-weight:\s*600/);
+  assert.match(headings, /text-wrap:\s*pretty/);
+  assert.match(listMarker, /color:\s*var\(--muted-2\)/);
+  assert.doesNotMatch(listMarker, /accent|danger|warning/);
 });
 
 test(
@@ -725,6 +731,7 @@ test(
       savedSettings: {
         cwd: "/workspace",
         modelByProvider: { codex: "", claude: "" },
+        palette: "cyan",
         provider: "codex",
         sidebarCollapsed: true,
         version: 5,
@@ -759,7 +766,7 @@ test(
   },
 );
 
-test("favicon and in-app marks use the new terminal logo in the original theme", async () => {
+test("favicon and in-app marks share a palette-aware terminal logo", async () => {
   const [index, icon, styles] = await Promise.all([
     readFile(INDEX, "utf8"),
     readFile(ICON, "utf8"),
@@ -768,31 +775,28 @@ test("favicon and in-app marks use the new terminal logo in the original theme",
 
   assert.match(index, /rel="icon" href="\/icon\.svg\?v=2"[^>]+sizes="any"/);
   assert.equal((index.match(/class="brand-logo"/g) || []).length, 2);
-  assert.match(icon, /fill="#121512"/);
-  assert.match(icon, /stroke="#d8ff6b"/);
-  assert.doesNotMatch(icon, /#42e8ff|#9b6dff|linearGradient/);
+  assert.match(icon, /id="neon"/);
+  assert.match(icon, /#42e8ff/);
+  assert.match(icon, /#9b6dff/);
+  assert.doesNotMatch(icon, /#d8ff6b/);
   assert.match(styles, /\.brand-logo\s*\{[^}]*stroke:\s*currentcolor/s);
 });
 
-test("composer redesign and neutral stop control retain the original theme", async () => {
+test("composer uses a neon palette frame and neutral ChatGPT-like stop control", async () => {
   const [index, styles] = await Promise.all([
     readFile(INDEX, "utf8"),
     readFile(STYLES, "utf8"),
   ]);
-  const composer = [...styles.matchAll(/\.composer\s*\{(?<body>[^}]*)\}/g)]
-    .map((match) => match.groups?.body || "")
-    .join("\n");
-  const stop = [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
-    .map((match) => match.groups?.body || "")
-    .join("\n");
+  const composer = styles.match(/\.composer\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const stop =
+    [...styles.matchAll(/\.stop-button\s*\{(?<body>[^}]*)\}/g)]
+      .map((match) => match.groups?.body || "")
+      .find((rule) => /background:/.test(rule)) || "";
   const placeholder =
     styles.match(/\.composer textarea:placeholder-shown\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
 
   assert.match(index, /class="context-chip-icon" data-icon="settings"/);
   assert.match(index, /id="stop-turn"[^>]*>[\s\S]*?<rect[^>]+rx="1\.5"/);
-  assert.match(composer, /background:\s*#171b17/);
-  assert.match(composer, /border-radius:\s*22px/);
-  assert.doesNotMatch(composer, /violet|neon|#42e8ff|#9b6dff/);
   assert.match(index, /id="composer-tools"[^>]*>[\s\S]*?<path d="M12 5v14M5 12h14"/);
   assert.match(index, /<strong>Goal mode<\/strong>/);
   assert.match(index, /<strong>Plan mode<\/strong>/);
@@ -802,12 +806,43 @@ test("composer redesign and neutral stop control retain the original theme", asy
     styles,
     /\.composer-tool-option-description\s*\{[^}]*white-space:\s*nowrap/s,
   );
+  assert.match(composer, /linear-gradient\(var\(--panel-3\), var\(--panel-3\)\) padding-box/);
+  assert.match(composer, /rgb\(var\(--accent-rgb\) \/ 0\.58\)/);
+  assert.match(composer, /rgb\(var\(--violet-rgb\) \/ 0\.46\)/);
   assert.match(stop, /color:\s*var\(--bg\)/);
   assert.match(stop, /background:\s*var\(--text\)/);
   assert.match(stop, /border-radius:\s*50%/);
   assert.doesNotMatch(stop, /danger|warning|#4b1728/);
   assert.match(placeholder, /direction:\s*rtl/);
   assert.match(placeholder, /text-align:\s*right/);
+});
+
+test("composer accepts files and exposes a clear drag-and-drop state", async () => {
+  const [index, styles] = await Promise.all([
+    readFile(INDEX, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+
+  assert.match(index, /id="image-input"[\s\S]*?type="file"[\s\S]*?multiple/);
+  assert.doesNotMatch(index, /id="image-input"[^>]*accept=/);
+  assert.match(index, /aria-label="افزودن فایل یا تصویر"/);
+  assert.match(index, /id="composer-drop-overlay"[\s\S]*?فایل‌ها را اینجا رها کنید/);
+  assert.match(styles, /\.composer-drop-overlay\s*\{[^}]*position:\s*absolute/s);
+  assert.match(styles, /\.composer\.drop-active\s*\{[^}]*--accent-rgb/s);
+});
+
+test("failed technical activity chips stay visually neutral", async () => {
+  const styles = await readFile(STYLES, "utf8");
+  const failedSummary =
+    styles.match(/\.activity-card\.failed summary\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const failedIcon =
+    styles.match(/\.activity-card\.failed summary::before\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+
+  assert.match(failedSummary, /color:\s*var\(--muted\)/);
+  assert.match(failedSummary, /background:\s*var\(--panel-2\)/);
+  assert.doesNotMatch(failedSummary, /--danger/);
+  assert.match(failedIcon, /color:\s*var\(--muted-2\)/);
+  assert.match(failedIcon, /content:\s*"›"/);
 });
 
 test(
@@ -1048,7 +1083,7 @@ test(
 );
 
 test(
-  "assistant actions quote responses without introducing palette controls",
+  "assistant actions quote responses and palette previews revert or persist correctly",
   { concurrency: false },
   async (t) => {
     const now = Math.floor(Date.now() / 1000);
@@ -1087,12 +1122,13 @@ test(
       throw new Error(`Unexpected RPC method: ${request.method}`);
     };
 
-    const { window } = await createHarness(t, {
+    const { values, window } = await createHarness(t, {
       fetchHandler,
       initialUrl: "http://localhost/?session=actions-thread",
       savedSettings: {
         cwd: "/workspace",
         modelByProvider: { codex: "", claude: "" },
+        palette: "red",
         provider: "codex",
         version: 5,
       },
@@ -1126,10 +1162,22 @@ test(
       "> ## عنوان\n> \n> - مورد اول\n> - مورد دوم\n\n",
     );
 
+    assert.equal(document.documentElement.dataset.palette, "red");
     document.querySelector("#open-settings").click();
-    assert.equal(document.querySelector("input[name='accent-palette']"), null);
-    assert.equal(document.documentElement.dataset.palette, undefined);
+    const purple = document.querySelector("input[name='accent-palette'][value='purple']");
+    purple.checked = true;
+    purple.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(document.documentElement.dataset.palette, "purple");
     document.querySelector("#settings-cancel").click();
+    assert.equal(document.documentElement.dataset.palette, "red");
+
+    document.querySelector("#open-settings").click();
+    const green = document.querySelector("input[name='accent-palette'][value='green']");
+    green.checked = true;
+    green.dispatchEvent(new window.Event("change", { bubbles: true }));
+    document.querySelector("#save-settings").click();
+    assert.equal(document.documentElement.dataset.palette, "green");
+    assert.equal(JSON.parse(values.get("codex-web-settings")).palette, "green");
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );
@@ -1209,6 +1257,7 @@ test(
       savedSettings: {
         cwd: "/workspace",
         modelByProvider: { codex: "", claude: "" },
+        palette: "cyan",
         provider: "codex",
         version: 5,
       },
@@ -1324,6 +1373,322 @@ test(
     FakeSpeechRecognition.latest.onerror({ error: "not-allowed" });
     assert.match(document.querySelector("#toasts .toast").textContent, /Gboard/);
     document.querySelector("#dictate").click();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "projects create focused chats with shared cwd and instructions",
+  { concurrency: false },
+  async (t) => {
+    const projects = [];
+    const rpcRequests = [];
+    const assignments = [];
+    const now = Math.floor(Date.now() / 1000);
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects" && (!options.method || options.method === "GET")) {
+        return jsonResponse({ projects, threadProjects: {} });
+      }
+      if (path === "/api/projects" && options.method === "POST") {
+        const body = JSON.parse(options.body);
+        const project = { id: "project-1", ...body, createdAt: Date.now(), updatedAt: Date.now() };
+        projects.push(project);
+        return jsonResponse({ project }, 201);
+      }
+      if (path === "/api/project-threads") {
+        assignments.push(JSON.parse(options.body));
+        return jsonResponse(assignments.at(-1));
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      rpcRequests.push(request);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") {
+        return jsonResponse({
+          result: {
+            thread: {
+              id: "project-thread",
+              cwd: request.params.cwd,
+              createdAt: now,
+              updatedAt: now,
+              status: { type: "idle" },
+              turns: [],
+            },
+            cwd: request.params.cwd,
+          },
+        });
+      }
+      if (request.method === "turn/start") {
+        return jsonResponse({ result: { turn: { id: "turn-project", status: "inProgress" } } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    document.querySelector("#project-add").click();
+    assert.equal(document.querySelector("#project-dialog").open, true);
+    document.querySelector("#project-name").value = "وب‌اپ";
+    document.querySelector("#project-cwd").value = "/workspace/web-app";
+    document.querySelector("#project-instructions").value = "قبل از پایان تست‌ها را اجرا کن.";
+    document
+      .querySelector("#project-form")
+      .dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+
+    await waitFor(
+      () => document.querySelector("[data-project-id='project-1']")?.classList.contains("active"),
+      "new project was not selected",
+    );
+    assert.match(document.querySelector("#welcome-title").textContent, /وب‌اپ/);
+    assert.equal(document.querySelector("#cwd-label").title, "/workspace/web-app");
+
+    typePrompt(window, "پروژه را بررسی کن");
+    document.querySelector("#send-message").click();
+    await waitFor(() => assignments.length === 1, "new thread was not assigned to project");
+    await waitFor(
+      () => rpcRequests.some((request) => request.method === "turn/start"),
+      "project prompt was not sent",
+    );
+    const start = rpcRequests.find((request) => request.method === "thread/start");
+    const turn = rpcRequests.find((request) => request.method === "turn/start");
+    assert.equal(start.params.cwd, "/workspace/web-app");
+    assert.match(start.params.developerInstructions, /قبل از پایان تست‌ها/);
+    assert.match(turn.params.developerInstructions, /قبل از پایان تست‌ها/);
+    assert.deepEqual(assignments[0], {
+      threadId: "project-thread",
+      projectId: "project-1",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "shared-chat action opens an existing private read-only link",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "share-thread",
+      name: "گفتگوی قابل اشتراک",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") return jsonResponse({ projects: [], threadProjects: {} });
+      if (path.startsWith("/api/shares?threadId=")) {
+        return jsonResponse({
+          share: {
+            id: "11111111-1111-4111-8111-111111111111",
+            threadId: thread.id,
+            updatedAt: Date.now(),
+            snapshot: { title: thread.name, messages: [] },
+          },
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=share-thread",
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === thread.name,
+      "shared thread did not open",
+    );
+    document.querySelector("#share-chat").click();
+    await waitFor(() => document.querySelector("#share-dialog").open, "share dialog did not open");
+    assert.equal(
+      document.querySelector("#share-link").value,
+      "http://localhost/share/11111111-1111-4111-8111-111111111111",
+    );
+    assert.match(document.querySelector(".share-private-note").textContent, /خصوصی/);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "usage indicator separates account quota from active context usage",
+  { concurrency: false },
+  async (t) => {
+    const [index, styles] = await Promise.all([
+      readFile(INDEX, "utf8"),
+      readFile(STYLES, "utf8"),
+    ]);
+    const usageValueRule =
+      styles.match(/\.usage-button bdi\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+    assert.match(index, /id="usage-percent" dir="rtl"/);
+    assert.match(usageValueRule, /font-family:\s*var\(--font\)/);
+    assert.doesNotMatch(usageValueRule, /var\(--mono\)/);
+    assert.match(usageValueRule, /direction:\s*rtl/);
+
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "usage-thread",
+      name: "Usage thread",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const resetAt = now + 3_600;
+    const rateLimits = {
+      rateLimits: {
+        limitId: "codex",
+        planType: "plus",
+        primary: { usedPercent: 82, windowDurationMins: 300, resetsAt: resetAt },
+        secondary: { usedPercent: 35, windowDurationMins: 10_080, resetsAt: resetAt + 86_400 },
+        rateLimitReachedType: null,
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          planType: "plus",
+          primary: { usedPercent: 82, windowDurationMins: 300, resetsAt: resetAt },
+          secondary: {
+            usedPercent: 35,
+            windowDurationMins: 10_080,
+            resetsAt: resetAt + 86_400,
+          },
+          rateLimitReachedType: null,
+        },
+      },
+      rateLimitResetCredits: { availableCount: 1, credits: [] },
+    };
+    const requests = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") return jsonResponse({ projects: [], threadProjects: {} });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      if (request.method === "account/rateLimits/read") {
+        return jsonResponse({ result: rateLimits });
+      }
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=usage-thread",
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === thread.name,
+      "usage thread did not open",
+    );
+    await waitFor(
+      () => document.querySelector("#usage-percent").textContent.includes("۸۲"),
+      "usage percentage did not load",
+    );
+    assert.equal(document.querySelector("#usage-button").dataset.state, "warning");
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method === "account/rateLimits/read" && request.params.provider === "codex",
+      ),
+      true,
+    );
+
+    document.querySelector("#usage-button").click();
+    assert.equal(document.querySelector("#usage-dialog").open, true);
+    assert.equal(document.querySelector("#usage-dialog h2").textContent, "مصرف");
+    assert.equal(document.querySelector("#usage-button span").textContent, "مصرف");
+    assert.match(document.querySelector("#usage-dialog").textContent, /مصرف حساب/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /Context گفت‌وگو/);
+    assert.match(document.querySelector("#context-usage-tooltip").textContent, /مستقل از محدودیت حساب/);
+    assert.match(document.querySelector("#account-usage-tooltip").textContent, /هر بازه جداگانه/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۵ ساعته/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /۸۲٪ استفاده · ۱۸٪ باقی/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /بازنشانی رایگان/);
+    assert.equal(document.querySelector("#usage-overview").classList.contains("hidden"), true);
+
+    FakeEventSource.latest.emit("rpc", {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: thread.id,
+        turnId: "turn-usage",
+        tokenUsage: {
+          total: { totalTokens: 91_000 },
+          last: { totalTokens: 48_000 },
+          modelContextWindow: 200_000,
+        },
+      },
+    });
+    await waitFor(
+      () => document.querySelector("#context-usage-percent").textContent.includes("۲۴"),
+      "context usage percentage was not rendered",
+    );
+    assert.equal(document.querySelector("#context-usage-percent").textContent, "۲۴٪ پر");
+    assert.equal(
+      document.querySelector("#context-usage-detail").textContent,
+      "۴۸٬۰۰۰ مصرف · ۱۵۲٬۰۰۰ باقی · سقف ۲۰۰٬۰۰۰ توکن",
+    );
+    assert.equal(
+      document.querySelector("#context-usage-progress").getAttribute("aria-valuenow"),
+      "24",
+    );
+
+    FakeEventSource.latest.emit("rpc", {
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: resetAt },
+          rateLimitReachedType: "rate_limit_reached",
+        },
+      },
+    });
+    await waitFor(
+      () => document.querySelector("#usage-button").dataset.state === "reached",
+      "reached usage state was not rendered",
+    );
+    assert.match(document.querySelector("#usage-overview").textContent, /سهمیهٔ این بازه تمام/);
+    assert.match(document.querySelector("#toasts").textContent, /سهمیهٔ این بازه تمام/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۱ هفته‌ای/);
+    document.querySelector("#usage-close").click();
+    assert.equal(document.querySelector("#usage-dialog").open, false);
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );

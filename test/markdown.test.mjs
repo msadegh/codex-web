@@ -85,6 +85,25 @@ test("keeps purely English message blocks left-to-right", () => {
   assert.equal(root.querySelector("li").getAttribute("dir"), "ltr");
 });
 
+test("uses the Persian UI font only for RTL text inside code blocks", () => {
+  const root = render(`\`\`\`text
+پنل جاب‌بورد در مرورگر
+↓
+API اختصاصی ساخت رزومه
+\`\`\``);
+  const block = root.querySelector(".code-block");
+
+  assert.equal(block.classList.contains("has-rtl-code"), true);
+  assert.equal(block.querySelector(".code-rtl-text").textContent, "پنل جاب‌بورد در مرورگر");
+  assert.match(block.querySelector("code").innerHTML, /API <span class="code-rtl-text">اختصاصی ساخت رزومه<\/span>/);
+
+  const english = render(`\`\`\`js
+const answer = 42;
+\`\`\``);
+  assert.equal(english.querySelector(".code-block").classList.contains("has-rtl-code"), false);
+  assert.equal(english.querySelector(".code-rtl-text"), null);
+});
+
 test("renders structured answers with semantic section and list hierarchy", () => {
   const root = render(`## پیشنهاد اصلی
 
@@ -107,6 +126,31 @@ test("renders structured answers with semantic section and list hierarchy", () =
   assert.equal(root.querySelectorAll("ol > li").length, 2);
   assert.equal(root.querySelector("ul").getAttribute("dir"), "rtl");
   assert.equal(root.querySelector("ol").getAttribute("dir"), "rtl");
+});
+
+test("renders nested lists, ordered starts, soft wraps, and section dividers", () => {
+  const root = render(`## نتیجه
+
+- گزینهٔ اصلی
+  - جزئیات اول
+  - جزئیات دوم
+- گزینهٔ بعدی
+
+3. مرحلهٔ سوم
+4. مرحلهٔ چهارم
+
+این یک پاراگراف است
+که در منبع روی دو خط نوشته شده.
+
+---
+
+ادامه`);
+
+  assert.equal(root.querySelectorAll("ul").length, 2);
+  assert.equal(root.querySelectorAll("ul > li > ul > li").length, 2);
+  assert.equal(root.querySelector("ol").getAttribute("start"), "3");
+  assert.equal(root.querySelectorAll("p")[0].querySelector("br"), null);
+  assert.equal(root.querySelectorAll("hr.markdown-divider").length, 1);
 });
 
 test("escapes table HTML and rejects unsafe links", () => {
