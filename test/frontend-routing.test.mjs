@@ -553,7 +553,7 @@ test(
     assert.equal(finalUrl.hash, "#composer");
     assert.match(
       threadStarts[0].developerInstructions,
-      /Turn list-like prose into real lists/,
+      /use a compact Markdown table by default/,
     );
   },
 );
@@ -808,6 +808,34 @@ test("composer redesign and neutral stop control retain the original theme", asy
   assert.doesNotMatch(stop, /danger|warning|#4b1728/);
   assert.match(placeholder, /direction:\s*rtl/);
   assert.match(placeholder, /text-align:\s*right/);
+});
+
+test("composer accepts files and exposes a clear drag-and-drop state", async () => {
+  const [index, styles] = await Promise.all([
+    readFile(INDEX, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+
+  assert.match(index, /id="image-input"[\s\S]*?type="file"[\s\S]*?multiple/);
+  assert.doesNotMatch(index, /id="image-input"[^>]*accept=/);
+  assert.match(index, /aria-label="افزودن فایل یا تصویر"/);
+  assert.match(index, /id="composer-drop-overlay"[\s\S]*?فایل‌ها را اینجا رها کنید/);
+  assert.match(styles, /\.composer-drop-overlay\s*\{[^}]*position:\s*absolute/s);
+  assert.match(styles, /\.composer\.drop-active\s*\{[^}]*--accent-rgb/s);
+});
+
+test("failed technical activity chips stay visually neutral", async () => {
+  const styles = await readFile(STYLES, "utf8");
+  const failedSummary =
+    styles.match(/\.activity-card\.failed summary\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  const failedIcon =
+    styles.match(/\.activity-card\.failed summary::before\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+
+  assert.match(failedSummary, /color:\s*var\(--muted\)/);
+  assert.match(failedSummary, /background:\s*var\(--panel-2\)/);
+  assert.doesNotMatch(failedSummary, /--danger/);
+  assert.match(failedIcon, /color:\s*var\(--muted-2\)/);
+  assert.match(failedIcon, /content:\s*"›"/);
 });
 
 test(
@@ -1325,5 +1353,253 @@ test(
     assert.match(document.querySelector("#toasts .toast").textContent, /Gboard/);
     document.querySelector("#dictate").click();
     await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "projects create focused chats with shared cwd and instructions",
+  { concurrency: false },
+  async (t) => {
+    const projects = [];
+    const rpcRequests = [];
+    const assignments = [];
+    const now = Math.floor(Date.now() / 1000);
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects" && (!options.method || options.method === "GET")) {
+        return jsonResponse({ projects, threadProjects: {} });
+      }
+      if (path === "/api/projects" && options.method === "POST") {
+        const body = JSON.parse(options.body);
+        const project = { id: "project-1", ...body, createdAt: Date.now(), updatedAt: Date.now() };
+        projects.push(project);
+        return jsonResponse({ project }, 201);
+      }
+      if (path === "/api/project-threads") {
+        assignments.push(JSON.parse(options.body));
+        return jsonResponse(assignments.at(-1));
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      rpcRequests.push(request);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") {
+        return jsonResponse({
+          result: {
+            thread: {
+              id: "project-thread",
+              cwd: request.params.cwd,
+              createdAt: now,
+              updatedAt: now,
+              status: { type: "idle" },
+              turns: [],
+            },
+            cwd: request.params.cwd,
+          },
+        });
+      }
+      if (request.method === "turn/start") {
+        return jsonResponse({ result: { turn: { id: "turn-project", status: "inProgress" } } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    document.querySelector("#project-add").click();
+    assert.equal(document.querySelector("#project-dialog").open, true);
+    document.querySelector("#project-name").value = "وب‌اپ";
+    document.querySelector("#project-cwd").value = "/workspace/web-app";
+    document.querySelector("#project-instructions").value = "قبل از پایان تست‌ها را اجرا کن.";
+    document
+      .querySelector("#project-form")
+      .dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+
+    await waitFor(
+      () => document.querySelector("[data-project-id='project-1']")?.classList.contains("active"),
+      "new project was not selected",
+    );
+    assert.match(document.querySelector("#welcome-title").textContent, /وب‌اپ/);
+    assert.equal(document.querySelector("#cwd-label").title, "/workspace/web-app");
+
+    typePrompt(window, "پروژه را بررسی کن");
+    document.querySelector("#send-message").click();
+    await waitFor(() => assignments.length === 1, "new thread was not assigned to project");
+    await waitFor(
+      () => rpcRequests.some((request) => request.method === "turn/start"),
+      "project prompt was not sent",
+    );
+    const start = rpcRequests.find((request) => request.method === "thread/start");
+    const turn = rpcRequests.find((request) => request.method === "turn/start");
+    assert.equal(start.params.cwd, "/workspace/web-app");
+    assert.match(start.params.developerInstructions, /قبل از پایان تست‌ها/);
+    assert.match(turn.params.developerInstructions, /قبل از پایان تست‌ها/);
+    assert.deepEqual(assignments[0], {
+      threadId: "project-thread",
+      projectId: "project-1",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "shared-chat action opens an existing private read-only link",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "share-thread",
+      name: "گفتگوی قابل اشتراک",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") return jsonResponse({ projects: [], threadProjects: {} });
+      if (path.startsWith("/api/shares?threadId=")) {
+        return jsonResponse({
+          share: {
+            id: "11111111-1111-4111-8111-111111111111",
+            threadId: thread.id,
+            updatedAt: Date.now(),
+            snapshot: { title: thread.name, messages: [] },
+          },
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=share-thread",
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === thread.name,
+      "shared thread did not open",
+    );
+    document.querySelector("#share-chat").click();
+    await waitFor(() => document.querySelector("#share-dialog").open, "share dialog did not open");
+    assert.equal(
+      document.querySelector("#share-link").value,
+      "http://localhost/share/11111111-1111-4111-8111-111111111111",
+    );
+    assert.match(document.querySelector(".share-private-note").textContent, /خصوصی/);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "usage indicator shows quota windows and explains reached limits",
+  { concurrency: false },
+  async (t) => {
+    const resetAt = Math.floor(Date.now() / 1000) + 3_600;
+    const rateLimits = {
+      rateLimits: {
+        limitId: "codex",
+        planType: "plus",
+        primary: { usedPercent: 82, windowDurationMins: 300, resetsAt: resetAt },
+        secondary: { usedPercent: 35, windowDurationMins: 10_080, resetsAt: resetAt + 86_400 },
+        rateLimitReachedType: null,
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          planType: "plus",
+          primary: { usedPercent: 82, windowDurationMins: 300, resetsAt: resetAt },
+          secondary: {
+            usedPercent: 35,
+            windowDurationMins: 10_080,
+            resetsAt: resetAt + 86_400,
+          },
+          rateLimitReachedType: null,
+        },
+      },
+      rateLimitResetCredits: { availableCount: 1, credits: [] },
+    };
+    const requests = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") return jsonResponse({ projects: [], threadProjects: {} });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      if (request.method === "account/rateLimits/read") {
+        return jsonResponse({ result: rateLimits });
+      }
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#usage-percent").textContent.includes("۸۲"),
+      "usage percentage did not load",
+    );
+    assert.equal(document.querySelector("#usage-button").dataset.state, "warning");
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method === "account/rateLimits/read" && request.params.provider === "codex",
+      ),
+      true,
+    );
+
+    document.querySelector("#usage-button").click();
+    assert.equal(document.querySelector("#usage-dialog").open, true);
+    assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۵ ساعته/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /۸۲٪ مصرف · ۱۸٪ باقی/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /بازنشانی رایگان/);
+
+    FakeEventSource.latest.emit("rpc", {
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: resetAt },
+          rateLimitReachedType: "rate_limit_reached",
+        },
+      },
+    });
+    await waitFor(
+      () => document.querySelector("#usage-button").dataset.state === "reached",
+      "reached usage state was not rendered",
+    );
+    assert.match(document.querySelector("#usage-overview").textContent, /سهمیهٔ این بازه تمام/);
+    assert.match(document.querySelector("#toasts").textContent, /سهمیهٔ این بازه تمام/);
+    assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۱ هفته‌ای/);
+    document.querySelector("#usage-close").click();
+    assert.equal(document.querySelector("#usage-dialog").open, false);
   },
 );

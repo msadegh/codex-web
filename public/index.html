@@ -47,6 +47,28 @@
           گفتگوی تازه
         </button>
 
+        <section class="project-sidebar" aria-labelledby="projects-label">
+          <div class="project-sidebar-heading">
+            <span id="projects-label">پروژه‌ها</span>
+            <button
+              class="project-add-button"
+              id="project-add"
+              type="button"
+              aria-label="ساخت پروژه"
+              title="ساخت پروژه"
+            >
+              ＋
+            </button>
+          </div>
+          <button class="project-all-button active" id="project-all" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6.5h16M4 12h16M4 17.5h16" />
+            </svg>
+            <span>همهٔ گفتگوها</span>
+          </button>
+          <div class="project-list" id="project-list"></div>
+        </section>
+
         <label class="search-box">
           <span aria-hidden="true">⌕</span>
           <input id="thread-search" type="search" placeholder="جستجو در گفتگوها…" autocomplete="off" />
@@ -116,7 +138,34 @@
               aria-live="polite"
             ></span>
           </div>
-          <button class="text-button" id="header-settings">تنظیمات</button>
+          <div class="topbar-actions">
+            <button
+              class="text-button usage-button"
+              id="usage-button"
+              type="button"
+              aria-label="نمایش مصرف و محدودیت‌های Codex"
+              title="مصرف و محدودیت‌های Codex"
+            >
+              <span>مصرف</span>
+              <bdi id="usage-percent">—</bdi>
+            </button>
+            <button class="text-button header-project-button" id="header-project" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+              </svg>
+              <span id="header-project-label">پروژه</span>
+            </button>
+            <button class="text-button" id="share-chat" type="button" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="18" cy="5" r="2.5" />
+                <circle cx="6" cy="12" r="2.5" />
+                <circle cx="18" cy="19" r="2.5" />
+                <path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5" />
+              </svg>
+              <span>اشتراک</span>
+            </button>
+            <button class="text-button" id="header-settings">تنظیمات</button>
+          </div>
         </header>
 
         <section class="conversation" id="conversation" aria-live="polite">
@@ -233,11 +282,20 @@
               class="image-input"
               id="image-input"
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/avif"
               multiple
               tabindex="-1"
               aria-hidden="true"
             />
+            <div class="composer-drop-overlay hidden" id="composer-drop-overlay" aria-hidden="true">
+              <span class="composer-drop-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" />
+                  <path d="M5 14v3.5A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14" />
+                </svg>
+              </span>
+              <strong>فایل‌ها را اینجا رها کنید</strong>
+              <span>تصویر، متن، PDF و فایل‌های پروژه</span>
+            </div>
             <section class="prompt-queue hidden" id="prompt-queue" aria-live="polite">
               <div class="prompt-queue-header">
                 <span class="prompt-queue-title">
@@ -313,7 +371,7 @@
               </div>
               <div class="composer-actions">
                 <span class="upload-status hidden" id="upload-status" aria-live="polite">
-                  در حال افزودن تصویر…
+                  در حال افزودن فایل…
                 </span>
                 <button
                   class="composer-tool-button"
@@ -332,13 +390,12 @@
                   class="image-button"
                   id="add-images"
                   type="button"
-                  aria-label="افزودن تصویر"
-                  title="افزودن تصویر"
+                  aria-label="افزودن فایل یا تصویر"
+                  title="افزودن فایل یا تصویر"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z" />
-                    <circle cx="9" cy="9" r="1.5" />
-                    <path d="m5 17 4.2-4.2a1.5 1.5 0 0 1 2.1 0l1.4 1.4 1.1-1.1a1.5 1.5 0 0 1 2.1 0L20 17.2" />
+                    <path d="m9.5 12.5 5.8-5.8a3 3 0 1 1 4.2 4.2l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.2-8.2" />
+                    <path d="m7.1 15.3 8.3-8.3" />
                   </svg>
                 </button>
                 <button
@@ -477,6 +534,107 @@
           <button class="primary-button" type="submit" id="save-settings">ذخیره</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog class="project-dialog" id="project-dialog">
+      <form method="dialog" id="project-form">
+        <div class="dialog-header">
+          <div>
+            <span class="dialog-eyebrow">Project</span>
+            <h2 id="project-dialog-title">پروژهٔ تازه</h2>
+            <p>پوشه و دستورهای مشترک برای گفتگوهای مرتبط.</p>
+          </div>
+          <button class="icon-button" id="project-dialog-close" type="button" aria-label="بستن">×</button>
+        </div>
+        <input id="project-id" type="hidden" />
+        <label class="field">
+          <span>نام پروژه</span>
+          <input id="project-name" maxlength="80" autocomplete="off" required />
+        </label>
+        <label class="field">
+          <span>پوشهٔ کاری</span>
+          <input id="project-cwd" dir="ltr" spellcheck="false" autocomplete="off" required />
+          <small>یک مسیر absolute و موجود روی همین سیستم.</small>
+        </label>
+        <label class="field">
+          <span>دستورهای پروژه <small>(اختیاری)</small></span>
+          <textarea
+            id="project-instructions"
+            rows="4"
+            maxlength="8000"
+            dir="auto"
+            placeholder="مثلاً پاسخ‌ها فارسی باشند و قبل از پایان تست‌ها اجرا شوند."
+          ></textarea>
+        </label>
+        <div class="dialog-actions project-dialog-actions">
+          <button class="danger-text-button hidden" id="project-delete" type="button">حذف پروژه</button>
+          <span class="dialog-actions-spacer"></span>
+          <button class="secondary-button" id="project-cancel" type="button">انصراف</button>
+          <button class="primary-button" id="project-save" type="submit">ذخیره</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="assign-project-dialog" id="assign-project-dialog">
+      <form method="dialog" id="assign-project-form">
+        <div class="dialog-header">
+          <div>
+            <span class="dialog-eyebrow">Project</span>
+            <h2>پروژهٔ این گفتگو</h2>
+            <p>انتخاب پروژه فقط گفتگو را گروه‌بندی می‌کند؛ فایل‌ها جابه‌جا نمی‌شوند.</p>
+          </div>
+          <button class="icon-button" id="assign-project-close" type="button" aria-label="بستن">×</button>
+        </div>
+        <div class="assign-project-options" id="assign-project-options"></div>
+        <div class="dialog-actions">
+          <button class="secondary-button" id="assign-project-cancel" type="button">انصراف</button>
+          <button class="primary-button" id="assign-project-save" type="submit">ذخیره</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="share-dialog" id="share-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow">Share chat</span>
+          <h2>اشتراک گفتگو</h2>
+          <p>یک snapshot فقط‌خواندنی از پیام‌های این گفتگو.</p>
+        </div>
+        <button class="icon-button" id="share-dialog-close" type="button" aria-label="بستن">×</button>
+      </div>
+      <div class="share-private-note">
+        لینک خصوصی است و فقط روی دستگاه‌هایی باز می‌شود که به همین Codex Web دسترسی دارند.
+      </div>
+      <label class="field">
+        <span>لینک اشتراک</span>
+        <input id="share-link" dir="ltr" readonly />
+      </label>
+      <div class="dialog-actions share-dialog-actions">
+        <button class="danger-text-button hidden" id="share-revoke" type="button">لغو لینک</button>
+        <span class="dialog-actions-spacer"></span>
+        <button class="secondary-button" id="share-refresh" type="button">به‌روزرسانی</button>
+        <button class="primary-button" id="share-copy" type="button">کپی لینک</button>
+      </div>
+    </dialog>
+
+    <dialog class="usage-dialog" id="usage-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow usage-eyebrow">Usage</span>
+          <h2>مصرف و محدودیت‌ها</h2>
+          <p id="usage-overview">در حال دریافت اطلاعات حساب…</p>
+        </div>
+        <button class="icon-button" id="usage-close" type="button" aria-label="بستن">×</button>
+      </div>
+      <div class="usage-limits" id="usage-limits" aria-live="polite"></div>
+      <div class="usage-account-details hidden" id="usage-account-details"></div>
+      <p class="usage-source-note">
+        این آمار سهمیهٔ حساب ChatGPT/Codex است؛ ارائه‌دهنده‌های سفارشی ممکن است محدودیت جداگانه داشته باشند.
+      </p>
+      <div class="dialog-actions">
+        <span class="dialog-actions-spacer"></span>
+        <button class="secondary-button" id="usage-refresh" type="button">به‌روزرسانی</button>
+      </div>
     </dialog>
 
     <dialog class="goal-dialog" id="goal-dialog">

@@ -15,6 +15,7 @@ import {
   defaultTailscaleBinary,
   TailscaleRemoteAccess,
 } from "./remote-access.mjs";
+import { sharedConversationSnapshot, WebDataStore } from "./web-data-store.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -54,7 +55,8 @@ Environment:
   CODEX_WEB_REMOTE=1        Enable private Tailscale remote access
   CODEX_WEB_REMOTE_PORT     Tailscale HTTPS port (default: CODEX_WEB_PORT)
   CODEX_WEB_REMOTE_USER     Allowed Tailscale login (default: device owner)
-  CODEX_WEB_UPLOAD_DIR      Image upload cache directory
+  CODEX_WEB_UPLOAD_DIR      File and image upload cache directory
+  CODEX_WEB_DATA_DIR        Projects and shared-chat metadata directory
   TAILSCALE_BIN             Tailscale executable (default: auto-detected)
   CODEX_BIN                 Codex executable (default: codex)
   CLAUDE_BIN                Claude Code executable (default: claude)
@@ -96,13 +98,16 @@ const { serverArgs: CODEX_ARGS, threadDefaults: CLI_THREAD_DEFAULTS } =
   prepareCodexArgs(RAW_CODEX_ARGS);
 const SHOULD_OPEN = !process.argv.includes("--no-open") && process.env.CODEX_WEB_NO_OPEN !== "1";
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const CACHE_HOME =
   process.env.XDG_CACHE_HOME ||
   (process.platform === "win32" && process.env.LOCALAPPDATA) ||
   join(os.homedir(), ".cache");
 const UPLOAD_DIR = resolve(
   process.env.CODEX_WEB_UPLOAD_DIR || join(CACHE_HOME, "codex-web", "uploads"),
+);
+const WEB_DATA_DIR = resolve(
+  process.env.CODEX_WEB_DATA_DIR || join(CACHE_HOME, "codex-web", "data"),
 );
 const CLAUDE_DATA_DIR = resolve(
   process.env.CLAUDE_WEB_DATA_DIR || join(CACHE_HOME, "codex-web", "claude"),
@@ -122,6 +127,10 @@ const RPC_ALLOWLIST = new Set([
   "account/rateLimits/read",
   "collaborationMode/list",
   "model/list",
+  "remoteControl/enable",
+  "remoteControl/status/read",
+  "remoteControl/pairing/start",
+  "remoteControl/pairing/status",
   "thread/list",
   "thread/read",
   "thread/start",
@@ -373,7 +382,18 @@ function requestImageType(req) {
   return type;
 }
 
-function requestImageName(req) {
+function requestUploadType(req) {
+  const contentType = req.headers["content-type"] || "application/octet-stream";
+  const type = contentType.split(";", 1)[0].trim().toLowerCase();
+  if (!type || type.length > 127 || !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type)) {
+    const error = new Error("Content-Type is invalid");
+    error.status = 415;
+    throw error;
+  }
+  return type;
+}
+
+function requestUploadName(req) {
   const header = req.headers["x-file-name"];
   if (typeof header !== "string" || !header || header.length > 1024) {
     const error = new Error("X-File-Name header is required");
@@ -392,14 +412,14 @@ function requestImageName(req) {
 
   const leaf = name.replaceAll("\\", "/").split("/").pop()?.trim() || "";
   if (!leaf) {
-    const error = new Error("Image file name is invalid");
+    const error = new Error("File name is invalid");
     error.status = 400;
     throw error;
   }
   return leaf;
 }
 
-async function readImage(req) {
+async function readUpload(req) {
   const contentLength = req.headers["content-length"];
   if (contentLength !== undefined) {
     const declaredSize = Number(contentLength);
@@ -408,8 +428,8 @@ async function readImage(req) {
       error.status = 400;
       throw error;
     }
-    if (declaredSize > MAX_IMAGE_BYTES) {
-      const error = new Error("Image is larger than 25 MiB");
+    if (declaredSize > MAX_UPLOAD_BYTES) {
+      const error = new Error("Upload is larger than 25 MiB");
       error.status = 413;
       throw error;
     }
@@ -419,15 +439,15 @@ async function readImage(req) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_IMAGE_BYTES) {
-      const error = new Error("Image is larger than 25 MiB");
+    if (size > MAX_UPLOAD_BYTES) {
+      const error = new Error("Upload is larger than 25 MiB");
       error.status = 413;
       throw error;
     }
     chunks.push(chunk);
   }
   if (size === 0) {
-    const error = new Error("Image body is empty");
+    const error = new Error("Upload body is empty");
     error.status = 400;
     throw error;
   }
@@ -472,7 +492,7 @@ function imageBytesMatchType(type, bytes) {
   return false;
 }
 
-function imageUploadName(originalName, type) {
+function safeUploadStem(originalName, fallback) {
   const originalExtension = extname(originalName);
   const originalStem = originalName.slice(0, originalName.length - originalExtension.length);
   const sanitizedStem = originalStem
@@ -487,7 +507,30 @@ function imageUploadName(originalName, type) {
     safeStem += character;
     safeStemBytes += characterBytes;
   }
-  return `${randomUUID()}-${safeStem || "image"}${IMAGE_TYPES.get(type)}`;
+  return safeStem || fallback;
+}
+
+function imageUploadName(originalName, type) {
+  return `${randomUUID()}-${safeUploadStem(originalName, "image")}${IMAGE_TYPES.get(type)}`;
+}
+
+function fileUploadName(originalName) {
+  const extension = extname(originalName).normalize("NFKC");
+  const safeExtension = /^\.[\p{L}\p{N}]{1,16}$/u.test(extension) ? extension : "";
+  return `${randomUUID()}-${safeUploadStem(originalName, "file")}${safeExtension}`;
+}
+
+async function persistUpload(bytes, name) {
+  await mkdir(UPLOAD_DIR, { recursive: true, mode: 0o700 });
+  await chmod(UPLOAD_DIR, 0o700);
+  const path = join(UPLOAD_DIR, name);
+  try {
+    await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (error.code !== "EEXIST") await unlink(path).catch(() => {});
+    throw error;
+  }
+  return path;
 }
 
 class CodexBridge {
@@ -710,6 +753,7 @@ class CodexBridge {
 }
 
 const bridge = new CodexBridge();
+const webData = new WebDataStore(WEB_DATA_DIR);
 const claudeProvider = new ClaudeProvider({
   binary: CLAUDE_BIN,
   cacheDir: CLAUDE_DATA_DIR,
@@ -783,7 +827,12 @@ async function listAllThreads(params = {}) {
 }
 
 async function serveStatic(req, res, url) {
-  const requestPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  const requestPath =
+    url.pathname === "/"
+      ? "/index.html"
+      : /^\/share\/[0-9a-f-]{36}$/i.test(url.pathname)
+        ? "/share.html"
+        : url.pathname;
   const decoded = decodeURIComponent(requestPath);
   const filePath = resolve(PUBLIC_DIR, `.${decoded.startsWith("/") ? decoded : `/${decoded}`}`);
   const relativePath = relative(PUBLIC_DIR, filePath);
@@ -865,24 +914,89 @@ const server = createServer(async (req, res) => {
       });
     }
 
+    if (req.method === "GET" && url.pathname === "/api/projects") {
+      return json(res, 200, await webData.workspace());
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/projects") {
+      const project = await webData.createProject(await readJson(req));
+      return json(res, 201, { project });
+    }
+
+    const projectRoute = url.pathname.match(
+      /^\/api\/projects\/([0-9a-f]{8}-[0-9a-f-]{27})$/i,
+    );
+    if (projectRoute && req.method === "PATCH") {
+      const project = await webData.updateProject(projectRoute[1], await readJson(req));
+      return json(res, 200, { project });
+    }
+    if (projectRoute && req.method === "DELETE") {
+      await webData.deleteProject(projectRoute[1]);
+      return json(res, 200, { ok: true });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/project-threads") {
+      const body = await readJson(req);
+      const assignment = await webData.assignThread(body.threadId, body.projectId);
+      return json(res, 200, assignment);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/shares") {
+      const threadId = url.searchParams.get("threadId");
+      if (!threadId) return json(res, 400, { error: "threadId is required" });
+      return json(res, 200, { share: await webData.findShareForThread(threadId) });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/shares") {
+      const body = await readJson(req);
+      const threadId = String(body.threadId || "").trim();
+      if (!threadId) return json(res, 400, { error: "threadId is required" });
+      const result = await providerRpc("thread/read", {
+        threadId,
+        includeTurns: true,
+      });
+      const thread = result?.thread;
+      if (!thread) return json(res, 404, { error: "Conversation not found" });
+      const snapshot = sharedConversationSnapshot(thread);
+      if (!snapshot.messages.length) {
+        return json(res, 409, { error: "Conversation has no messages to share" });
+      }
+      const share = await webData.upsertShare(threadId, snapshot);
+      return json(res, 201, { share });
+    }
+
+    const shareRoute = url.pathname.match(
+      /^\/api\/shares\/([0-9a-f]{8}-[0-9a-f-]{27})$/i,
+    );
+    if (shareRoute && req.method === "GET") {
+      const share = await webData.getShare(shareRoute[1]);
+      if (!share) return json(res, 404, { error: "Shared conversation not found" });
+      return json(res, 200, { share });
+    }
+    if (shareRoute && req.method === "DELETE") {
+      await webData.deleteShare(shareRoute[1]);
+      return json(res, 200, { ok: true });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/uploads/images") {
       const type = requestImageType(req);
-      const originalName = requestImageName(req);
-      const bytes = await readImage(req);
+      const originalName = requestUploadName(req);
+      const bytes = await readUpload(req);
       if (!imageBytesMatchType(type, bytes)) {
         return json(res, 415, { error: "Image bytes do not match Content-Type" });
       }
 
-      await mkdir(UPLOAD_DIR, { recursive: true, mode: 0o700 });
-      await chmod(UPLOAD_DIR, 0o700);
       const name = imageUploadName(originalName, type);
-      const path = join(UPLOAD_DIR, name);
-      try {
-        await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
-      } catch (error) {
-        if (error.code !== "EEXIST") await unlink(path).catch(() => {});
-        throw error;
-      }
+      const path = await persistUpload(bytes, name);
+      return json(res, 201, { path, name, size: bytes.length, type });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/uploads/files") {
+      const type = requestUploadType(req);
+      const originalName = requestUploadName(req);
+      const bytes = await readUpload(req);
+      const name = fileUploadName(originalName);
+      const path = await persistUpload(bytes, name);
       return json(res, 201, { path, name, size: bytes.length, type });
     }
 

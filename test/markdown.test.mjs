@@ -109,6 +109,31 @@ test("renders structured answers with semantic section and list hierarchy", () =
   assert.equal(root.querySelector("ol").getAttribute("dir"), "rtl");
 });
 
+test("renders nested lists, ordered starts, soft wraps, and section dividers", () => {
+  const root = render(`## نتیجه
+
+- گزینهٔ اصلی
+  - جزئیات اول
+  - جزئیات دوم
+- گزینهٔ بعدی
+
+3. مرحلهٔ سوم
+4. مرحلهٔ چهارم
+
+این یک پاراگراف است
+که در منبع روی دو خط نوشته شده.
+
+---
+
+ادامه`);
+
+  assert.equal(root.querySelectorAll("ul").length, 2);
+  assert.equal(root.querySelectorAll("ul > li > ul > li").length, 2);
+  assert.equal(root.querySelector("ol").getAttribute("start"), "3");
+  assert.equal(root.querySelectorAll("p")[0].querySelector("br"), null);
+  assert.equal(root.querySelectorAll("hr.markdown-divider").length, 1);
+});
+
 test("escapes table HTML and rejects unsafe links", () => {
   const root = render(`| ورودی | پیوند |
 | --- | --- |

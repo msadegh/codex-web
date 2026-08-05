@@ -181,6 +181,22 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   assert.deepEqual(await readFile(upload.path), png);
   assert.equal((await stat(upload.path)).mode & 0o777, 0o600);
 
+  const markdownFile = Buffer.from("# dropped notes\n", "utf8");
+  const fileUploadResponse = await fetch(`${baseUrl}/api/uploads/files`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "text/markdown",
+      "X-File-Name": encodeURIComponent("یادداشت‌ها.md"),
+    },
+    body: markdownFile,
+  });
+  assert.equal(fileUploadResponse.status, 201);
+  const fileUpload = await fileUploadResponse.json();
+  assert.equal(fileUpload.path.startsWith(join(cacheHome, "codex-web", "uploads")), true);
+  assert.equal(fileUpload.path.endsWith(".md"), true);
+  assert.deepEqual(await readFile(fileUpload.path), markdownFile);
+  assert.equal((await stat(fileUpload.path)).mode & 0o777, 0o600);
+
   const invalidUploadResponse = await fetch(`${baseUrl}/api/uploads/images`, {
     method: "POST",
     headers: {

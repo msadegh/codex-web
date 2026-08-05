@@ -165,6 +165,12 @@ test("submitted user message stays visible while the assistant is streaming", as
             content: [{ type: "text", text: "پیام قبلی" }],
           },
           {
+            type: "agentMessage",
+            id: "commentary-old",
+            text: "در حال بررسی سابقه",
+            phase: "commentary",
+          },
+          {
             type: "reasoning",
             id: "reasoning-old",
             summary: [{ text: "بررسی خلاصه" }],
@@ -185,18 +191,29 @@ test("submitted user message stays visible while the assistant is streaming", as
             type: "agentMessage",
             id: "agent-old",
             text: "پاسخ قبلی",
+            phase: "final_answer",
           },
         ],
       },
     ],
   };
   const turnStartRequests = [];
+  const attachmentUploadRequests = [];
   let resolveAcceptedTurnFailure;
   let resolveTurnStart;
 
   globalThis.fetch = async (path, options = {}) => {
     if (path === "/api/status") {
       return jsonResponse({ ready: true, cwd: "/workspace" });
+    }
+    if (path === "/api/uploads/files") {
+      attachmentUploadRequests.push({ options, path });
+      return jsonResponse({
+        path: "C:\\uploads\\notes.md",
+        name: "notes.md",
+        size: options.body.size,
+        type: options.headers["Content-Type"],
+      }, 201);
     }
     if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
 
@@ -257,12 +274,54 @@ test("submitted user message stays visible while the assistant is streaming", as
     "thread history was not rendered",
   );
   assert.equal(document.querySelectorAll(".message-avatar").length, 0);
+  const process = document.querySelector(".turn-process[data-turn-id='turn-old']");
+  const commentary = document.querySelector("[data-item-id='commentary-old']");
+  const finalAnswer = document.querySelector("[data-item-id='agent-old']");
+  assert.ok(process);
+  assert.equal(process.hasAttribute("open"), false);
+  assert.equal(process.querySelector(".turn-process-label").textContent, "روند کار");
+  assert.equal(commentary.closest(".turn-process"), process);
+  assert.equal(commentary.querySelector(".message-actions"), null);
+  assert.equal(finalAnswer.closest(".turn-process"), null);
+  assert.equal(finalAnswer.classList.contains("final-answer"), true);
+  assert.equal(finalAnswer.dataset.phase, "final_answer");
   assert.equal(document.querySelector("[data-item-id='reasoning-old']").hasAttribute("open"), false);
   assert.equal(document.querySelector("[data-item-id='reasoning-old'] summary").textContent, "تفکر");
   assert.equal(document.querySelector("[data-item-id='reasoning-empty']").hidden, true);
   assert.equal(document.querySelector("[data-item-id='command-old']").classList.contains("completed"), true);
 
   const prompt = document.querySelector("#prompt");
+  prompt.setSelectionRange = (start, end) => {
+    prompt.selectionStart = start;
+    prompt.selectionEnd = end;
+  };
+  const composer = document.querySelector(".composer");
+  const dropOverlay = document.querySelector("#composer-drop-overlay");
+  const attachment = { name: "notes.md", size: 4, type: "text/markdown" };
+  const dragEvent = (type, files = []) => {
+    const event = new dom.window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", {
+      value: { dropEffect: "none", files, types: ["Files"] },
+    });
+    return event;
+  };
+  composer.dispatchEvent(dragEvent("dragenter"));
+  assert.equal(composer.classList.contains("drop-active"), true);
+  assert.equal(dropOverlay.classList.contains("hidden"), false);
+  composer.dispatchEvent(dragEvent("dragleave"));
+  assert.equal(composer.classList.contains("drop-active"), false);
+  composer.dispatchEvent(dragEvent("dragenter"));
+  composer.dispatchEvent(dragEvent("drop", [attachment]));
+  await waitFor(() => attachmentUploadRequests.length === 1, "dropped file was not uploaded");
+  await waitFor(
+    () =>
+      prompt.value.includes("C:\\uploads\\notes.md") &&
+      document.querySelector("#upload-status").classList.contains("hidden"),
+    "uploaded path was not inserted",
+  );
+  assert.equal(attachmentUploadRequests[0].options.headers["Content-Type"], "text/markdown");
+  assert.equal(composer.classList.contains("drop-active"), false);
+
   prompt.value = "پیام تازه";
   prompt.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   document.querySelector("#send-message").click();
@@ -281,8 +340,9 @@ test("submitted user message stays visible while the assistant is streaming", as
   assert.notEqual(clientId, "user-from-server");
   assert.match(
     turnStartRequests[0].developerInstructions,
-    /Turn list-like prose into real lists/,
+    /use a compact Markdown table by default/,
   );
+  assert.match(turnStartRequests[0].developerInstructions, /Selectively bold key terms/);
 
   FakeEventSource.latest.emit("rpc", {
     method: "item/agentMessage/delta",
