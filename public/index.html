@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#000000" />
     <meta
       name="description"
       content="رابط وب لوکال برای Codex CLI با پشتیبانی درست از متن فارسی و انگلیسی"
@@ -176,10 +177,9 @@
                 <path d="M34 43.5h12" />
               </svg>
             </div>
-            <h2 id="welcome-title">چه کاری روی کد انجام دهیم؟</h2>
+            <h2 id="welcome-title">امروز روی چی کار کنیم؟</h2>
             <p id="welcome-description">
-              پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها،
-              MCPها و دسترسی‌های ترمینال شما.
+              کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.
             </p>
             <div class="suggestions">
               <button data-prompt="ساختار این پروژه را بررسی کن و خلاصه‌ای از بخش‌های اصلی بده.">
@@ -524,6 +524,33 @@
           </select>
           <small>در حالت --print سؤال تعاملی نمایش داده نمی‌شود؛ این گزینه مستقیماً به Claude Code CLI ارسال می‌شود.</small>
         </label>
+
+        <fieldset class="field palette-field" id="palette-field">
+          <legend>رنگ تأکیدی رابط</legend>
+          <small>فقط اجزای رنگی تغییر می‌کنند؛ پس‌زمینه و کنتراست متن ثابت می‌ماند.</small>
+          <div class="palette-options">
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="cyan" />
+              <span class="palette-swatch palette-cyan" aria-hidden="true"></span>
+              <span>فیروزه‌ای</span>
+            </label>
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="red" />
+              <span class="palette-swatch palette-red" aria-hidden="true"></span>
+              <span>قرمز</span>
+            </label>
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="purple" />
+              <span class="palette-swatch palette-purple" aria-hidden="true"></span>
+              <span>بنفش</span>
+            </label>
+            <label class="palette-option">
+              <input type="radio" name="accent-palette" value="green" />
+              <span class="palette-swatch palette-green" aria-hidden="true"></span>
+              <span>سبز</span>
+            </label>
+          </div>
+        </fieldset>
 
         <div class="warning-box" id="full-access-warning">
           دسترسی کامل یعنی agent می‌تواند خارج از workspace هم فایل‌ها و فرمان‌های سیستم را تغییر دهد.

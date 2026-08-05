@@ -313,6 +313,7 @@ const defaultSettings = {
   cwd: "",
   effort: "",
   modelByProvider: { codex: "", claude: "" },
+  palette: "cyan",
   personality: "",
   provider: "codex",
   sandbox: "",
@@ -320,6 +321,7 @@ const defaultSettings = {
 };
 
 const SETTINGS_VERSION = 5;
+const ACCENT_PALETTES = new Set(["cyan", "red", "purple", "green"]);
 const ACTIVE_PROJECT_KEY = "codex-web-active-project";
 
 function loadActiveProjectId() {
@@ -421,12 +423,20 @@ function loadSettings() {
       claudePermissionMode:
         savedSettings.claudePermissionMode || defaultSettings.claudePermissionMode,
       modelByProvider,
+      palette: ACCENT_PALETTES.has(savedSettings.palette)
+        ? savedSettings.palette
+        : defaultSettings.palette,
       provider: savedSettings.provider === "claude" ? "claude" : defaultSettings.provider,
       sidebarCollapsed: savedSettings.sidebarCollapsed === true,
     };
   } catch {
     return { ...defaultSettings };
   }
+}
+
+function applyPalette(palette = defaultSettings.palette) {
+  const next = ACCENT_PALETTES.has(palette) ? palette : defaultSettings.palette;
+  document.documentElement.dataset.palette = next;
 }
 
 function persistSettings() {
@@ -1733,13 +1743,13 @@ function updateAgentCopy(provider) {
     return;
   }
   if (provider === "claude") {
-    elements.welcomeTitle.textContent = "چه کاری را به Claude بسپاریم؟";
+    elements.welcomeTitle.textContent = "امروز چی رو به Claude بسپاریم؟";
     elements.welcomeDescription.textContent =
-      "پشت این صفحه Claude Code CLI اجرا می‌شود؛ با sessionها و permission mode خود Claude.";
+      "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی Claude پشت صحنه آماده‌اند.";
   } else {
-    elements.welcomeTitle.textContent = "چه کاری روی کد انجام دهیم؟";
+    elements.welcomeTitle.textContent = "امروز روی چی کار کنیم؟";
     elements.welcomeDescription.textContent =
-      "پشت این صفحه همان Codex CLI اجرا می‌شود؛ با همان login، تنظیمات، skillها، MCPها و دسترسی‌های ترمینال شما.";
+      "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.";
   }
 }
 
@@ -1880,6 +1890,10 @@ function updateSettingsUi() {
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
   elements.claudePermissionMode.value = state.settings.claudePermissionMode;
+  for (const input of document.querySelectorAll('input[name="accent-palette"]')) {
+    input.checked = input.value === state.settings.palette;
+  }
+  applyPalette(state.settings.palette);
   updateSettingsProviderUi(provider);
   updateModelLabel(provider);
 }
@@ -1921,12 +1935,18 @@ function saveSettings() {
       ...state.settings.modelByProvider,
       [provider]: elements.modelSelect.value,
     },
+    palette:
+      [...document.querySelectorAll('input[name="accent-palette"]')].find(
+        (input) => input.checked,
+      )?.value ||
+      defaultSettings.palette,
     personality: elements.personalitySelect.value,
     provider,
     sandbox: elements.sandboxSelect.value,
     sidebarCollapsed: state.settings.sidebarCollapsed,
   };
   persistSettings();
+  applyPalette(state.settings.palette);
   state.models = state.modelsByProvider[provider] || [];
   updateSettingsUi();
   updateConnection();
@@ -3579,6 +3599,8 @@ function updateReasoning(view, item = {}, phase = "completed", outcome = "comple
     running,
   );
 }
+
+applyPalette(state.settings.palette);
 
 function updateCompaction(view, phase) {
   const running = phase !== "completed";
@@ -5610,6 +5632,15 @@ elements.settingsForm.addEventListener("submit", (event) => event.preventDefault
 elements.settingsCancel.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsClose.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsDialog.addEventListener("close", updateSettingsUi);
+for (const input of document.querySelectorAll('input[name="accent-palette"]')) {
+  input.addEventListener("change", () => {
+    if (!input.checked) return;
+    for (const candidate of document.querySelectorAll('input[name="accent-palette"]')) {
+      candidate.checked = candidate === input;
+    }
+    applyPalette(input.value);
+  });
+}
 elements.providerSelect.addEventListener("change", () => {
   const provider = elements.providerSelect.value;
   updateSettingsProviderUi(provider);
