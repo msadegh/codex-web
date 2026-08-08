@@ -275,6 +275,42 @@ test("slash commands are accessible and stay isolated from model turns", async (
     "thread was not opened",
   );
 
+  const contextUsage = document.querySelector("#context-usage");
+  assert.equal(contextUsage.classList.contains("hidden"), true);
+  FakeEventSource.latest.emit("rpc", {
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-slash",
+      turnId: "turn-before-compact",
+      tokenUsage: {
+        total: { totalTokens: 700_000 },
+        last: { totalTokens: 200_000 },
+        modelContextWindow: 250_000,
+      },
+    },
+  });
+  assert.equal(contextUsage.classList.contains("hidden"), false);
+  assert.equal(contextUsage.dataset.percent, "80");
+  assert.equal(contextUsage.dataset.level, "watch");
+  assert.equal(document.querySelector("#context-usage-fill").style.width, "80%");
+  assert.match(contextUsage.title, /compact/);
+
+  FakeEventSource.latest.emit("rpc", {
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-slash",
+      turnId: "turn-needs-compact",
+      tokenUsage: {
+        total: { totalTokens: 900_000 },
+        last: { totalTokens: 225_000 },
+        modelContextWindow: 250_000,
+      },
+    },
+  });
+  assert.equal(contextUsage.dataset.percent, "90");
+  assert.equal(contextUsage.dataset.level, "compact");
+  assert.match(document.querySelector("#context-usage-percent").textContent, /کامپکت/);
+
   const menu = document.querySelector("#slash-command-menu");
   const options = document.querySelector("#slash-command-options");
   const prompt = document.querySelector("#prompt");
@@ -436,6 +472,7 @@ test("slash commands are accessible and stay isolated from model turns", async (
   );
 
   assert.equal(prompt.value, "");
+  assert.equal(contextUsage.classList.contains("hidden"), true);
   assert.equal(
     rpcRequests.filter((request) => request.method === "thread/start").length,
     0,

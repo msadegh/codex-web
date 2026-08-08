@@ -84,6 +84,20 @@
             <div class="thread-meta" id="thread-meta" dir="ltr"></div>
           </div>
           <div
+            class="context-usage hidden"
+            id="context-usage"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="context-usage-copy">
+              <span class="context-usage-tokens" id="context-usage-tokens" dir="ltr"></span>
+              <strong class="context-usage-percent" id="context-usage-percent"></strong>
+            </span>
+            <span class="context-usage-meter" aria-hidden="true">
+              <span id="context-usage-fill"></span>
+            </span>
+          </div>
+          <div
             class="message-navigation"
             role="group"
             aria-label="جابه‌جایی بین پیام‌های شما"

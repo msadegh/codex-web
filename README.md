@@ -28,6 +28,8 @@ many terminals.
   conversation. Claude runs non-interactively and follows its configured
   permission mode and permission rules.
 - Streams answers, tool activity, plans, file changes, and command output.
+- Shows the active Codex context size and percentage per conversation, with
+  warning states that make it clear when manual `/compact` is worth considering.
 - Supports native Codex Plan mode and persistent Goal mode, including goal
   pause, resume, edit, clear, and progress state.
 - Offers browser dictation that turns speech into editable prompt text.

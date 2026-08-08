@@ -468,6 +468,66 @@ body.sidebar-collapsed .menu-button {
   flex: 1;
 }
 
+.context-usage {
+  --context-color: #67d391;
+
+  display: grid;
+  min-width: 152px;
+  padding: 5px 8px 6px;
+  gap: 4px;
+  color: var(--muted);
+  background: rgb(255 255 255 / 0.025);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  direction: rtl;
+}
+
+.context-usage[data-level="watch"] {
+  --context-color: #f2c45e;
+}
+
+.context-usage[data-level="compact"] {
+  --context-color: var(--danger);
+
+  color: #ffd0ca;
+  background: rgb(255 136 125 / 0.07);
+  border-color: rgb(255 136 125 / 0.3);
+}
+
+.context-usage-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.context-usage-percent {
+  color: var(--context-color);
+  font-size: 0.69rem;
+}
+
+.context-usage-meter {
+  display: block;
+  height: 3px;
+  overflow: hidden;
+  background: var(--line-soft);
+  border-radius: 999px;
+  direction: ltr;
+}
+
+.context-usage-meter > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--context-color);
+  border-radius: inherit;
+  transition: width 180ms ease, background-color 180ms ease;
+}
+
 .message-navigation {
   display: flex;
   flex: 0 0 auto;
@@ -1916,6 +1976,10 @@ dialog form,
     padding: 0 12px;
   }
 
+  .context-usage {
+    min-width: 132px;
+  }
+
   #header-settings {
     display: none;
   }
@@ -1961,6 +2025,19 @@ dialog form,
   .message-navigation-button {
     width: 27px;
     height: 29px;
+  }
+
+  .context-usage {
+    min-width: 58px;
+    padding-inline: 7px;
+  }
+
+  .context-usage-copy {
+    justify-content: center;
+  }
+
+  .context-usage-tokens {
+    display: none;
   }
 
   .text-button {

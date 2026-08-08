@@ -179,6 +179,10 @@ const elements = {
   approvalTitle: $("#approval-title"),
   approvalSelect: $("#approval-select"),
   connectionLabel: $("#connection-label"),
+  contextUsage: $("#context-usage"),
+  contextUsageFill: $("#context-usage-fill"),
+  contextUsagePercent: $("#context-usage-percent"),
+  contextUsageTokens: $("#context-usage-tokens"),
   composerHint: $("#composer-hint"),
   composerTools: $("#composer-tools"),
   composerToolsMenu: $("#composer-tools-menu"),
@@ -664,7 +668,7 @@ function readableApproval(value) {
 }
 
 function contextUsageText(usage) {
-  const total = usage?.total?.totalTokens;
+  const total = usage?.last?.totalTokens ?? usage?.total?.totalTokens;
   const windowSize = usage?.modelContextWindow;
   if (!Number.isFinite(total)) return "هنوز گزارش نشده";
   const totalText = total.toLocaleString("fa-IR");
@@ -674,6 +678,66 @@ function contextUsageText(usage) {
     "fa-IR",
     { maximumFractionDigits: 1 },
   )}٪)`;
+}
+
+function contextUsageMetrics(usage) {
+  // `total` is cumulative for the whole session and can exceed the model window.
+  // `last` is the active context size reported for the latest model request.
+  const usedTokens = usage?.last?.totalTokens ?? usage?.total?.totalTokens;
+  const windowSize = usage?.modelContextWindow;
+  if (
+    !Number.isFinite(usedTokens) ||
+    usedTokens < 0 ||
+    !Number.isFinite(windowSize) ||
+    windowSize <= 0
+  ) {
+    return null;
+  }
+  const percent = Math.min(100, Math.max(0, (usedTokens / windowSize) * 100));
+  return { percent, usedTokens, windowSize };
+}
+
+function compactTokenCount(value) {
+  return new Intl.NumberFormat("fa-IR", {
+    maximumFractionDigits: 1,
+    notation: "compact",
+  }).format(value);
+}
+
+function renderContextUsage() {
+  const threadId = state.currentThreadId;
+  const usage = threadId ? state.threadTokenUsage.get(threadId) : null;
+  const metrics = contextUsageMetrics(usage);
+  const isCodexThread = threadId && effectiveProvider() === "codex";
+  if (!isCodexThread || !metrics) {
+    elements.contextUsage.classList.add("hidden");
+    elements.contextUsage.removeAttribute("data-level");
+    elements.contextUsage.removeAttribute("data-percent");
+    elements.contextUsageFill.style.width = "0%";
+    return;
+  }
+
+  const roundedPercent = Math.round(metrics.percent);
+  const level = roundedPercent >= 85 ? "compact" : roundedPercent >= 70 ? "watch" : "normal";
+  const usedText = compactTokenCount(metrics.usedTokens);
+  const windowText = compactTokenCount(metrics.windowSize);
+  const percentText = `${roundedPercent.toLocaleString("fa-IR")}٪`;
+  let guidance = "هنوز نیازی به compact نیست.";
+  if (level === "watch") guidance = "context در حال پر شدن است؛ برای compact آماده باشید.";
+  if (level === "compact") guidance = "پیشنهاد می‌شود /compact را اجرا کنید.";
+
+  elements.contextUsageTokens.textContent = `${usedText} / ${windowText}`;
+  elements.contextUsagePercent.textContent =
+    level === "compact" ? `${percentText} · کامپکت` : percentText;
+  elements.contextUsageFill.style.width = `${metrics.percent}%`;
+  elements.contextUsage.dataset.level = level;
+  elements.contextUsage.dataset.percent = String(roundedPercent);
+  const description = `${metrics.usedTokens.toLocaleString("fa-IR")} از ${metrics.windowSize.toLocaleString(
+    "fa-IR",
+  )} توکن context مصرف شده (${percentText}). ${guidance}`;
+  elements.contextUsage.title = description;
+  elements.contextUsage.setAttribute("aria-label", description);
+  elements.contextUsage.classList.remove("hidden");
 }
 
 function showSlashStatus() {
@@ -2411,6 +2475,7 @@ function newChat({ draftId = null, historyMode = "push" } = {}) {
   elements.welcome.classList.remove("hidden");
   elements.threadTitle.textContent = "گفتگوی تازه";
   elements.threadMeta.textContent = "";
+  renderContextUsage();
   updateThreadUrl(null, historyMode, state.newDraftId);
   restoreDraft(null);
   renderThreadList();
@@ -2447,6 +2512,7 @@ function setCurrentThread(thread, metadata = {}) {
     .filter(Boolean)
     .join("  ·  ");
   elements.welcome.classList.add("hidden");
+  renderContextUsage();
   restoreDraft(thread.id);
   renderThreadList();
   activateThreadInteractions(thread.id);
@@ -3514,6 +3580,7 @@ function handleNotification(message) {
 
   if (method === "thread/tokenUsage/updated" && threadId) {
     state.threadTokenUsage.set(threadId, params.tokenUsage || null);
+    if (threadId === state.currentThreadId) renderContextUsage();
     return;
   }
 
