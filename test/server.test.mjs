@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { gunzipSync, gzipSync } from "node:zlib";
 import test from "node:test";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -266,6 +267,203 @@ test("server starts with a fake Codex bridge and enforces local security boundar
     messages.some((message) => message.method === rejectedMethod),
     false,
   );
+});
+
+test("Codex sessions export and import as safe resumable bundles", async (t) => {
+  const temporaryRoot = await mkdtemp(join(os.tmpdir(), "codex-web-session-test-"));
+  const codexHome = join(temporaryRoot, "codex-home");
+  const cacheHome = join(temporaryRoot, "cache");
+  const destinationCwd = join(temporaryRoot, "destination-project");
+  const sourceDirectory = join(codexHome, "sessions", "2026", "08", "08");
+  const threadId = "019fe0c6-b7ad-7bf2-b23c-c2c30918e51d";
+  const rolloutPath = join(
+    sourceDirectory,
+    `rollout-2026-08-08T09-49-07-${threadId}.jsonl`,
+  );
+  const sourceImagePath = join(temporaryRoot, "source-image.png");
+  const missingImagePath = join(temporaryRoot, "missing-image.png");
+  const sourceImage = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00,
+  ]);
+  const rollout = [
+    {
+      type: "session_meta",
+      payload: {
+        id: threadId,
+        session_id: "11111111-1111-4111-8111-111111111111",
+        timestamp: "2026-08-08T09:49:07.375Z",
+        cwd: join(temporaryRoot, "source-project"),
+        originator: "codex_web",
+        cli_version: "0.145.0",
+      },
+    },
+    {
+      type: "event_msg",
+      payload: {
+        type: "user_message",
+        message: "history and images stay intact",
+        images: [],
+        local_images: [sourceImagePath, missingImagePath],
+      },
+    },
+  ].map((record) => JSON.stringify(record)).join("\n") + "\n";
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  await chmod(FAKE_CODEX, 0o755);
+  await mkdir(sourceDirectory, { recursive: true });
+  await mkdir(destinationCwd, { recursive: true });
+  await writeFile(rolloutPath, rollout, { mode: 0o600 });
+  await writeFile(sourceImagePath, sourceImage, { mode: 0o600 });
+
+  const child = spawn(process.execPath, [SERVER, "--no-open"], {
+    cwd: temporaryRoot,
+    env: {
+      ...process.env,
+      CODEX_BIN: FAKE_CODEX,
+      CODEX_HOME: codexHome,
+      CODEX_WEB_CWD: destinationCwd,
+      CODEX_WEB_PORT: String(port),
+      XDG_CACHE_HOME: cacheHome,
+      FAKE_CODEX_THREAD_ID: threadId,
+      FAKE_CODEX_THREAD_PATH: rolloutPath,
+      FAKE_CODEX_THREAD_NAME: "Transfer test",
+    },
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(async () => {
+    await stopChild(child);
+    await rm(temporaryRoot, { recursive: true, force: true });
+  });
+  await waitForReady(baseUrl, child);
+
+  const exportedResponse = await fetch(
+    `${baseUrl}/api/sessions/export?threadId=${threadId}`,
+  );
+  assert.equal(exportedResponse.status, 200);
+  assert.equal(
+    exportedResponse.headers.get("content-type"),
+    "application/x-codex-session",
+  );
+  assert.match(
+    exportedResponse.headers.get("content-disposition"),
+    new RegExp(`${threadId}\\.codex-session`),
+  );
+  const exportedBytes = Buffer.from(await exportedResponse.arrayBuffer());
+  assert.equal(exportedResponse.headers.get("x-codex-session-asset-count"), "1");
+  assert.equal(exportedResponse.headers.get("x-codex-session-missing-asset-count"), "1");
+  const unpacked = gunzipSync(exportedBytes);
+  const magic = Buffer.from("CODEXWEBSESSION2\n", "ascii");
+  assert.equal(unpacked.subarray(0, magic.length).equals(magic), true);
+  const headerSize = unpacked.readUInt32BE(magic.length);
+  const headerStart = magic.length + 4;
+  const headerEnd = headerStart + headerSize;
+  const bundle = JSON.parse(unpacked.toString("utf8", headerStart, headerEnd));
+  assert.equal(bundle.format, "codex-web-session");
+  assert.equal(bundle.version, 2);
+  assert.equal(bundle.provider, "codex");
+  assert.equal(bundle.thread.id, threadId);
+  assert.equal(bundle.thread.name, "Transfer test");
+  assert.equal(bundle.rolloutSize, Buffer.byteLength(rollout));
+  assert.deepEqual(bundle.assets[0].paths, [sourceImagePath]);
+  assert.equal(bundle.assets[0].type, "image/png");
+  assert.equal(bundle.assets[0].size, sourceImage.length);
+  assert.equal(bundle.missingAssets[0].path, missingImagePath);
+  const bundledRolloutStart = headerEnd;
+  const bundledRolloutEnd = bundledRolloutStart + bundle.rolloutSize;
+  assert.equal(unpacked.toString("utf8", bundledRolloutStart, bundledRolloutEnd), rollout);
+  assert.deepEqual(
+    unpacked.subarray(bundledRolloutEnd, bundledRolloutEnd + sourceImage.length),
+    sourceImage,
+  );
+
+  await rm(rolloutPath);
+  const importHeaders = {
+    "Content-Type": "application/x-codex-session",
+    "X-Codex-Web-Cwd": encodeURIComponent(destinationCwd),
+  };
+  const importedResponse = await fetch(`${baseUrl}/api/sessions/import`, {
+    method: "POST",
+    headers: importHeaders,
+    body: exportedBytes,
+  });
+  assert.equal(importedResponse.status, 201);
+  assert.deepEqual(await importedResponse.json(), {
+    threadId,
+    name: "Transfer test",
+    cwd: destinationCwd,
+    alreadyExists: false,
+    assetsImported: 1,
+    assetPathsUpdated: 1,
+    missingAssets: 1,
+  });
+
+  const storedFiles = await readdir(join(codexHome, "sessions"), { recursive: true });
+  const storedRelativePath = storedFiles.find((path) => path.endsWith(`-${threadId}.jsonl`));
+  assert.ok(storedRelativePath);
+  const storedPath = join(codexHome, "sessions", storedRelativePath);
+  const importedImagePath = join(
+    cacheHome,
+    "codex-web",
+    "uploads",
+    `session-${bundle.assets[0].sha256}.png`,
+  );
+  assert.equal(
+    await readFile(storedPath, "utf8"),
+    rollout.replace(sourceImagePath, importedImagePath),
+  );
+  assert.equal((await stat(storedPath)).mode & 0o777, 0o600);
+  assert.deepEqual(await readFile(importedImagePath), sourceImage);
+  assert.equal((await stat(importedImagePath)).mode & 0o777, 0o600);
+
+  const repeatedResponse = await fetch(`${baseUrl}/api/sessions/import`, {
+    method: "POST",
+    headers: importHeaders,
+    body: exportedBytes,
+  });
+  assert.equal(repeatedResponse.status, 200);
+  assert.deepEqual(await repeatedResponse.json(), {
+    threadId,
+    name: "Transfer test",
+    cwd: destinationCwd,
+    alreadyExists: true,
+    assetsImported: 1,
+    assetPathsUpdated: 1,
+    missingAssets: 1,
+  });
+
+  const differentBundle = {
+    format: "codex-web-session",
+    version: 1,
+    provider: "codex",
+    thread: bundle.thread,
+    rollout: `${rollout}${JSON.stringify({ type: "event_msg", payload: { type: "other" } })}\n`,
+  };
+  const collisionResponse = await fetch(`${baseUrl}/api/sessions/import`, {
+    method: "POST",
+    headers: importHeaders,
+    body: gzipSync(Buffer.from(JSON.stringify(differentBundle))),
+  });
+  assert.equal(collisionResponse.status, 409);
+  assert.match((await collisionResponse.json()).error, /different session/i);
+
+  const malformedResponse = await fetch(`${baseUrl}/api/sessions/import`, {
+    method: "POST",
+    headers: importHeaders,
+    body: Buffer.from("not gzip"),
+  });
+  assert.equal(malformedResponse.status, 400);
+
+  const crossOriginResponse = await fetch(`${baseUrl}/api/sessions/import`, {
+    method: "POST",
+    headers: {
+      ...importHeaders,
+      Origin: "https://attacker.example",
+    },
+    body: exportedBytes,
+  });
+  assert.equal(crossOriginResponse.status, 403);
 });
 
 test("Claude provider supports sessions, streaming, resume, and merged thread listing", async (t) => {

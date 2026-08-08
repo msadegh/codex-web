@@ -261,6 +261,132 @@ function typePrompt(window, value) {
 }
 
 test(
+  "Codex session controls download and import a thread with the destination cwd",
+  { concurrency: false },
+  async (t) => {
+    const threadId = "019fe0c6-b7ad-7bf2-b23c-c2c30918e51d";
+    const thread = {
+      id: threadId,
+      name: "Transferred session",
+      cwd: "/source/project",
+      createdAt: 1_754_649_600,
+      updatedAt: 1_754_649_660,
+      provider: "codex",
+      status: { type: "idle" },
+      turns: [],
+    };
+    const requests = [];
+    const fetchHandler = async (path, options = {}) => {
+      requests.push({ path, options });
+      if (path === "/api/status") {
+        return jsonResponse({ ready: true, cwd: "/destination/project" });
+      }
+      if (String(path).startsWith("/api/sessions/export?")) {
+        return new Response(new Blob(["bundle"]), {
+          headers: {
+            "Content-Disposition": `attachment; filename="codex-session-${threadId}.codex-session"`,
+            "Content-Type": "application/x-codex-session",
+          },
+        });
+      }
+      if (path === "/api/sessions/import") {
+        return jsonResponse({
+          threadId,
+          name: thread.name,
+          cwd: "/destination/project",
+          alreadyExists: false,
+        }, 201);
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({
+          result: {
+            thread: { ...thread, cwd: request.params.cwd || thread.cwd },
+            cwd: request.params.cwd || thread.cwd,
+          },
+        });
+      }
+      if (request.method === "thread/setName") return jsonResponse({ result: {} });
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: `http://localhost/?session=${threadId}`,
+      savedSettings: {
+        cwd: "/destination/project",
+        modelByProvider: { codex: "", claude: "" },
+        provider: "codex",
+        version: 5,
+      },
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === thread.name,
+      "Codex thread was not opened",
+    );
+
+    const downloadButton = document.querySelector("#download-session");
+    assert.equal(downloadButton.classList.contains("hidden"), false);
+    downloadButton.click();
+    await waitFor(
+      () => requests.some((request) => String(request.path).startsWith("/api/sessions/export?")),
+      "session export was not requested",
+    );
+    await waitFor(() => !downloadButton.disabled, "session download did not finish");
+
+    const sessionFile = new Blob(["portable session"], {
+      type: "application/x-codex-session",
+    });
+    Object.defineProperty(sessionFile, "name", {
+      value: "portable.codex-session",
+    });
+    const sessionInput = document.querySelector("#session-input");
+    Object.defineProperty(sessionInput, "files", {
+      configurable: true,
+      value: [sessionFile],
+    });
+    sessionInput.dispatchEvent(new window.Event("change"));
+
+    await waitFor(
+      () => requests.some((request) => request.path === "/api/sessions/import"),
+      "session import was not requested",
+    );
+    await waitFor(
+      () => requests.filter((request) => {
+        if (request.path !== "/api/rpc") return false;
+        const rpcRequest = JSON.parse(request.options.body);
+        return (
+          rpcRequest.method === "thread/resume" &&
+          rpcRequest.params.threadId === threadId &&
+          rpcRequest.params.cwd === "/destination/project"
+        );
+      }).length >= 1,
+      "imported session was not resumed with destination cwd",
+    );
+    const importRequest = requests.find((request) => request.path === "/api/sessions/import");
+    assert.equal(
+      importRequest.options.headers["X-Codex-Web-Cwd"],
+      encodeURIComponent("/destination/project"),
+    );
+    assert.equal(importRequest.options.body, sessionFile);
+
+    document.querySelector("#new-chat").click();
+    assert.equal(downloadButton.classList.contains("hidden"), true);
+  },
+);
+
+test(
   "deep links hydrate independently and use readiness of the opened thread provider",
   { concurrency: false },
   async (t) => {

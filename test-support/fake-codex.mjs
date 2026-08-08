@@ -29,16 +29,40 @@ input.on("line", (line) => {
   if (!Object.hasOwn(message, "id")) return;
 
   let result = {};
+  const fakeThreadId = process.env.FAKE_CODEX_THREAD_ID || "test-thread";
+  const fakeThread = {
+    id: fakeThreadId,
+    name: process.env.FAKE_CODEX_THREAD_NAME || undefined,
+    path: process.env.FAKE_CODEX_THREAD_PATH || undefined,
+    cwd: process.env.FAKE_CODEX_THREAD_CWD || process.cwd(),
+    createdAt: 1_754_649_600,
+    updatedAt: 1_754_649_660,
+    status: { type: process.env.FAKE_CODEX_THREAD_STATUS || "idle" },
+    turns: [],
+  };
   if (message.method === "thread/start") {
     result = {
       thread: {
-        id: "test-thread",
+        id: fakeThreadId,
         createdAt: Math.floor(Date.now() / 1000),
         status: { type: "idle" },
       },
     };
+  } else if (message.method === "thread/read") {
+    result = { thread: fakeThread };
+  } else if (message.method === "thread/resume") {
+    result = {
+      thread: {
+        ...fakeThread,
+        cwd: message.params?.cwd || fakeThread.cwd,
+      },
+      cwd: message.params?.cwd || fakeThread.cwd,
+    };
   } else if (message.method === "thread/list") {
-    result = { data: [], nextCursor: null };
+    result = {
+      data: process.env.FAKE_CODEX_THREAD_ID ? [fakeThread] : [],
+      nextCursor: null,
+    };
   } else if (message.method === "model/list") {
     result = { data: [] };
   }

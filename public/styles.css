@@ -192,6 +192,48 @@ body.sidebar-collapsed .menu-button {
   transform: translateY(1px);
 }
 
+.session-import-button {
+  display: flex;
+  min-height: 38px;
+  margin: 0 0 11px;
+  padding: 7px 12px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.session-import-button:hover {
+  color: var(--text);
+  background: var(--panel-3);
+}
+
+.session-import-button svg,
+.session-download-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.session-import-button:disabled,
+.session-download-button:disabled {
+  cursor: wait;
+  opacity: 0.42;
+}
+
+.session-download-button {
+  flex: 0 0 auto;
+}
+
 .search-box {
   display: flex;
   align-items: center;

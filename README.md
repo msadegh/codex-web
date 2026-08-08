@@ -30,6 +30,9 @@ many terminals.
 - Streams answers, tool activity, plans, file changes, and command output.
 - Shows the active Codex context size and percentage per conversation, with
   warning states that make it clear when manual `/compact` is worth considering.
+- Exports an idle Codex conversation and its attached local images as a
+  portable `.codex-session` file, then restores image paths when importing it
+  into another Codex Web installation.
 - Supports native Codex Plan mode and persistent Goal mode, including goal
   pause, resume, edit, clear, and progress state.
 - Offers browser dictation that turns speech into editable prompt text.
@@ -246,6 +249,36 @@ original session IDs. Discovery does not modify those transcripts, but resuming
 a conversation causes Claude Code itself to append to its native history.
 Protect both directories because conversation history may contain source code,
 tool input/output, or other sensitive content.
+
+## Move a Codex session between installations
+
+Open an idle Codex conversation and use the download button in its header to
+save a `.codex-session` file. On another Codex Web installation, first select
+the destination project in **Settings**, then choose **Upload session** in the
+sidebar. Codex Web imports the history, resumes it with that destination working
+directory, restores its name when available, and opens it for you to continue.
+
+The bundle contains the native Codex rollout history, basic conversation
+metadata, and available local images explicitly attached to user messages.
+Images are stored as separate assets in the transfer bundle, not embedded into
+the rollout. On import they are copied to the destination Codex Web image cache
+and the matching `local_images` paths are rewritten before the session resumes.
+Missing or deleted source images are reported, while images already embedded by
+Codex as data URLs remain part of the rollout itself.
+
+The bundle does **not** contain login credentials, API keys, the workspace, Git
+state, or unrelated files mentioned in prompts or tool output. Copy or clone the
+project separately and select its absolute path on the destination before
+importing. The destination Codex CLI must also have the required model provider
+and authentication configured. Paths recorded in older tool output remain
+historical; only attached-image paths and the working directory used for
+subsequent turns are updated.
+
+Treat `.codex-session` files as private data: prompts and tool input/output may
+contain source code, command output, paths, or secrets. Import never overwrites
+a different local session with the same ID; importing an identical bundle is
+safe and simply opens the existing session. Transfer currently supports Codex
+sessions only, not Claude conversations.
 
 ## Composer workflow and modes
 

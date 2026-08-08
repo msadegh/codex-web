@@ -46,6 +46,19 @@
           <span aria-hidden="true">＋</span>
           گفتگوی تازه
         </button>
+        <button class="session-import-button" id="import-session" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5" />
+            <path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" />
+          </svg>
+          آپلود سشن
+        </button>
+        <input
+          class="hidden"
+          id="session-input"
+          type="file"
+          accept=".codex-session,application/x-codex-session,application/gzip"
+        />
 
         <label class="search-box">
           <span aria-hidden="true">⌕</span>
@@ -130,6 +143,18 @@
               aria-live="polite"
             ></span>
           </div>
+          <button
+            class="icon-button session-download-button hidden"
+            id="download-session"
+            type="button"
+            aria-label="دانلود این سشن"
+            title="دانلود این سشن"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5" />
+              <path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" />
+            </svg>
+          </button>
           <button class="text-button" id="header-settings">تنظیمات</button>
         </header>
 

@@ -192,10 +192,12 @@ const elements = {
   cwdInput: $("#cwd-input"),
   cwdLabel: $("#cwd-label"),
   dictate: $("#dictate"),
+  downloadSession: $("#download-session"),
   effortSelect: $("#effort-select"),
   fullAccessWarning: $("#full-access-warning"),
   headerSettings: $("#header-settings"),
   imageInput: $("#image-input"),
+  importSession: $("#import-session"),
   goalClear: $("#goal-clear"),
   goalDialog: $("#goal-dialog"),
   goalDialogCancel: $("#goal-dialog-cancel"),
@@ -240,6 +242,7 @@ const elements = {
   promptQueueItems: $("#prompt-queue-items"),
   sandboxSelect: $("#sandbox-select"),
   saveSettings: $("#save-settings"),
+  sessionInput: $("#session-input"),
   scrollBottom: $("#scroll-bottom"),
   sendMessage: $("#send-message"),
   selectionAsk: $("#selection-ask"),
@@ -325,6 +328,7 @@ const state = {
   interactionSubmitting: false,
   scrollFrame: null,
   scrollingToBottom: false,
+  sessionTransferBusy: false,
   settings: loadSettings(),
   selectedAssistantText: "",
   slashActiveIndex: 0,
@@ -399,6 +403,132 @@ function providerForThread(threadId) {
   return typeof threadId === "string" && threadId.startsWith("claude:")
     ? "claude"
     : "codex";
+}
+
+function updateSessionTransferControls() {
+  const hasCodexThread =
+    Boolean(state.currentThreadId) && providerForThread(state.currentThreadId) === "codex";
+  const unavailable = state.sessionTransferBusy || state.navigating || state.busy;
+  elements.downloadSession.classList.toggle("hidden", !hasCodexThread);
+  elements.downloadSession.disabled = !hasCodexThread || unavailable;
+  elements.importSession.disabled = unavailable;
+  elements.sessionInput.disabled = unavailable;
+  elements.downloadSession.title = state.sessionTransferBusy
+    ? "در حال انتقال سشن…"
+    : "دانلود این سشن";
+  elements.importSession.title = state.sessionTransferBusy
+    ? "در حال انتقال سشن…"
+    : "آپلود سشن Codex از دستگاه دیگر";
+}
+
+async function sessionTransferResponse(response) {
+  if (response.ok) return response;
+  const data = await response.json().catch(() => ({}));
+  const error = new Error(data.error || `HTTP ${response.status}`);
+  error.status = response.status;
+  throw error;
+}
+
+async function downloadCurrentSession() {
+  const threadId = state.currentThreadId;
+  if (!threadId || providerForThread(threadId) !== "codex" || state.sessionTransferBusy) return;
+  state.sessionTransferBusy = true;
+  updateSessionTransferControls();
+  try {
+    const response = await sessionTransferResponse(
+      await fetch(`/api/sessions/export?threadId=${encodeURIComponent(threadId)}`),
+    );
+    const assetCount = Number(response.headers.get("X-Codex-Session-Asset-Count") || 0);
+    const missingAssetCount = Number(
+      response.headers.get("X-Codex-Session-Missing-Asset-Count") || 0,
+    );
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const fileName =
+      disposition.match(/filename="([^"]+)"/i)?.[1] ||
+      `codex-session-${threadId}.codex-session`;
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+    toast(
+      missingAssetCount > 0
+        ? `فایل سشن با ${assetCount.toLocaleString("fa-IR")} تصویر آماده شد؛ ${missingAssetCount.toLocaleString("fa-IR")} تصویر قدیمی در دسترس نبود.`
+        : assetCount > 0
+          ? `فایل سشن همراه با ${assetCount.toLocaleString("fa-IR")} تصویر آمادهٔ دانلود شد.`
+          : "فایل سشن آمادهٔ دانلود شد.",
+      missingAssetCount > 0 ? "warning" : "success",
+    );
+  } catch (error) {
+    showError(error, "دانلود سشن");
+  } finally {
+    state.sessionTransferBusy = false;
+    updateSessionTransferControls();
+  }
+}
+
+async function importSessionFile(file) {
+  if (!file || state.sessionTransferBusy) return;
+  if (file.size > 200 * 1024 * 1024) {
+    toast("حجم فایل سشن بیشتر از ۲۰۰ مگابایت است.", "error");
+    return;
+  }
+  state.sessionTransferBusy = true;
+  updateSessionTransferControls();
+  try {
+    const cwd = state.settings.cwd.trim();
+    const response = await sessionTransferResponse(
+      await fetch("/api/sessions/import", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-codex-session",
+          "X-File-Name": encodeURIComponent(file.name || "session.codex-session"),
+          ...(cwd ? { "X-Codex-Web-Cwd": encodeURIComponent(cwd) } : {}),
+        },
+        body: file,
+      }),
+    );
+    const imported = await response.json();
+    await refreshThreads();
+    const opened = await openThread(imported.threadId, {
+      resumeOverrides: { cwd: imported.cwd },
+    });
+    if (!opened) throw new Error("سشن وارد شد، اما بازکردن آن ممکن نبود");
+    if (imported.name) {
+      try {
+        await rpc("thread/setName", {
+          threadId: imported.threadId,
+          name: imported.name,
+        });
+        if (state.currentThread?.id === imported.threadId) {
+          state.currentThread.name = imported.name;
+          elements.threadTitle.textContent = threadDisplayTitle(state.currentThread);
+        }
+        await refreshThreads();
+      } catch (error) {
+        toast(`سشن وارد شد، اما نام آن بازیابی نشد: ${error.message}`, "warning");
+      }
+    }
+    toast(
+      imported.missingAssets > 0
+        ? `سشن وارد شد و ${imported.assetsImported.toLocaleString("fa-IR")} تصویر بازیابی شد؛ ${imported.missingAssets.toLocaleString("fa-IR")} تصویر در فایل انتقال موجود نبود.`
+        : imported.assetsImported > 0
+          ? `سشن همراه با ${imported.assetsImported.toLocaleString("fa-IR")} تصویر وارد و باز شد.`
+          : imported.alreadyExists
+            ? "این سشن از قبل موجود بود و باز شد."
+            : "سشن با موفقیت وارد و باز شد.",
+      imported.missingAssets > 0 ? "warning" : "success",
+    );
+  } catch (error) {
+    showError(error, "آپلود سشن");
+  } finally {
+    state.sessionTransferBusy = false;
+    updateSessionTransferControls();
+  }
 }
 
 function providerLabel(provider) {
@@ -1394,6 +1524,7 @@ function setBusy(busy, turnId = null) {
   state.currentTurnId = busy ? turnId : null;
   elements.stopTurn.classList.toggle("hidden", !busy || !state.currentTurnId);
   updateComposerControls();
+  updateSessionTransferControls();
 }
 
 function setNavigating(navigating) {
@@ -1406,6 +1537,7 @@ function setNavigating(navigating) {
   elements.prompt.disabled = navigating;
   updateConnection();
   updateComposerControls();
+  updateSessionTransferControls();
   resizePrompt();
 }
 
@@ -2940,7 +3072,10 @@ function renderHistory(thread) {
   if (!state.busy) scheduleNextQueuedPrompt(thread.id);
 }
 
-async function openThread(threadId, { historyMode = "push" } = {}) {
+async function openThread(
+  threadId,
+  { historyMode = "push", resumeOverrides = {} } = {},
+) {
   if (!threadId) return false;
   if (!state.currentThreadId && imageUploadsForDraft() > 0) {
     toast("برای حفظ تصاویر این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
@@ -2948,7 +3083,7 @@ async function openThread(threadId, { historyMode = "push" } = {}) {
     return false;
   }
   const navigationVersion = ++state.navigationVersion;
-  if (threadId === state.currentThreadId) {
+  if (threadId === state.currentThreadId && Object.keys(resumeOverrides).length === 0) {
     state.openingThreadId = null;
     updateThreadUrl(threadId, historyMode);
     setNavigating(false);
@@ -2967,7 +3102,7 @@ async function openThread(threadId, { historyMode = "push" } = {}) {
   state.threadEventBacklog.set(threadId, []);
   try {
     elements.threadTitle.textContent = "در حال باز کردن…";
-    const result = await rpc("thread/resume", { threadId });
+    const result = await rpc("thread/resume", { threadId, ...resumeOverrides });
     if (navigationVersion !== state.navigationVersion) return false;
     setCurrentThread(result.thread, result);
     renderHistory(result.thread);
@@ -4610,6 +4745,13 @@ elements.promptQueueItems.addEventListener("click", (event) => {
 elements.promptQueueClear.addEventListener("click", clearPromptQueue);
 elements.stopTurn.addEventListener("click", stopTurn);
 elements.newChat.addEventListener("click", () => newChat());
+elements.downloadSession.addEventListener("click", () => void downloadCurrentSession());
+elements.importSession.addEventListener("click", () => elements.sessionInput.click());
+elements.sessionInput.addEventListener("change", () => {
+  const [file] = elements.sessionInput.files || [];
+  elements.sessionInput.value = "";
+  if (file) void importSessionFile(file);
+});
 elements.threadList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-thread-id]");
   if (button) openThread(button.dataset.threadId);

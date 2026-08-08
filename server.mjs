@@ -2,12 +2,13 @@
 
 import { createServer } from "node:http";
 import { createReadStream, readFileSync } from "node:fs";
-import { chmod, mkdir, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { randomUUID } from "node:crypto";
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
 import os from "node:os";
 import { ClaudeProvider } from "./providers/claude-provider.mjs";
 
@@ -62,6 +63,9 @@ const CLAUDE_CONFIG_DIR = resolve(
     process.env.CLAUDE_HOME ||
     join(os.homedir(), ".claude"),
 );
+const CODEX_HOME = resolve(process.env.CODEX_HOME || join(os.homedir(), ".codex"));
+const CODEX_SESSIONS_DIR = join(CODEX_HOME, "sessions");
+const CODEX_ARCHIVED_SESSIONS_DIR = join(CODEX_HOME, "archived_sessions");
 const DEFAULT_CWD = process.env.CODEX_WEB_CWD || process.cwd();
 const WEB_ARGS = new Set(["--no-open", "--help", "-h", "--version", "-V"]);
 const RAW_CODEX_ARGS = process.argv.slice(2).filter((arg) => !WEB_ARGS.has(arg));
@@ -70,6 +74,18 @@ const { serverArgs: CODEX_ARGS, threadDefaults: CLI_THREAD_DEFAULTS } =
 const SHOULD_OPEN = !process.argv.includes("--no-open") && process.env.CODEX_WEB_NO_OPEN !== "1";
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_SESSION_UPLOAD_BYTES = 200 * 1024 * 1024;
+const MAX_SESSION_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_SESSION_ASSET_BYTES = MAX_IMAGE_BYTES;
+const MAX_SESSION_ASSET_TOTAL_BYTES = 128 * 1024 * 1024;
+const MAX_SESSION_ASSET_COUNT = 200;
+const MAX_SESSION_BUNDLE_BYTES = 200 * 1024 * 1024;
+const SESSION_BUNDLE_FORMAT = "codex-web-session";
+const SESSION_BUNDLE_VERSION = 2;
+const LEGACY_SESSION_BUNDLE_VERSION = 1;
+const SESSION_BUNDLE_MAGIC = Buffer.from("CODEXWEBSESSION2\n", "ascii");
+const CODEX_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CACHE_HOME =
   process.env.XDG_CACHE_HOME ||
   (process.platform === "win32" && process.env.LOCALAPPDATA) ||
@@ -173,8 +189,7 @@ function readProfileOverrides(profileName) {
   if (!/^[A-Za-z0-9_-]+$/.test(profileName)) {
     throw new Error(`Invalid Codex profile name: ${profileName}`);
   }
-  const codexHome = process.env.CODEX_HOME || join(os.homedir(), ".codex");
-  const profilePath = join(codexHome, `${profileName}.config.toml`);
+  const profilePath = join(CODEX_HOME, `${profileName}.config.toml`);
   let content;
   try {
     content = readFileSync(profilePath, "utf8");
@@ -333,6 +348,587 @@ async function readJson(req) {
     error.status = 400;
     throw error;
   }
+}
+
+function httpError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+async function readLimitedBody(req, maxBytes, label) {
+  const contentLength = req.headers["content-length"];
+  if (contentLength !== undefined) {
+    const declaredSize = Number(contentLength);
+    if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+      throw httpError("Content-Length is invalid", 400);
+    }
+    if (declaredSize > maxBytes) {
+      throw httpError(`${label} is too large`, 413);
+    }
+  }
+
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw httpError(`${label} is too large`, 413);
+    chunks.push(chunk);
+  }
+  if (size === 0) throw httpError(`${label} is empty`, 400);
+  return Buffer.concat(chunks, size);
+}
+
+function pathInside(root, candidate) {
+  const pathFromRoot = relative(root, candidate);
+  return (
+    pathFromRoot !== ".." &&
+    !pathFromRoot.startsWith(`..${sep}`) &&
+    !isAbsolute(pathFromRoot)
+  );
+}
+
+async function allowedRolloutPath(candidate) {
+  if (typeof candidate !== "string" || !isAbsolute(candidate)) {
+    throw httpError("Codex did not provide a valid session path", 409);
+  }
+  let resolvedPath;
+  try {
+    resolvedPath = await realpath(candidate);
+  } catch {
+    throw httpError("The Codex session file no longer exists", 404);
+  }
+  for (const root of [CODEX_SESSIONS_DIR, CODEX_ARCHIVED_SESSIONS_DIR]) {
+    try {
+      const resolvedRoot = await realpath(root);
+      if (pathInside(resolvedRoot, resolvedPath)) return resolvedPath;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  throw httpError("Codex session path is outside CODEX_HOME", 403);
+}
+
+function validateRollout(rollout, expectedId) {
+  if (typeof rollout !== "string" || Buffer.byteLength(rollout) > MAX_SESSION_FILE_BYTES) {
+    throw httpError("Session history is too large", 413);
+  }
+  let metadata = null;
+  const localImagePaths = new Set();
+  for (const line of rollout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line);
+      if (!metadata) metadata = record;
+      if (
+        record?.type === "event_msg" &&
+        record.payload?.type === "user_message" &&
+        Array.isArray(record.payload.local_images)
+      ) {
+        for (const path of record.payload.local_images) {
+          if (typeof path === "string" && isAbsolute(path)) localImagePaths.add(path);
+        }
+      }
+    } catch {
+      throw httpError("Session history contains invalid JSONL", 400);
+    }
+  }
+  if (metadata?.type !== "session_meta" || !metadata.payload) {
+    throw httpError("Session history is missing session metadata", 400);
+  }
+  const id = metadata.payload.id;
+  const sessionId = metadata.payload.session_id;
+  if (
+    !CODEX_SESSION_ID_PATTERN.test(expectedId) ||
+    (id !== undefined ? id !== expectedId : sessionId !== expectedId)
+  ) {
+    throw httpError("Session history id does not match the bundle", 400);
+  }
+  return { metadata: metadata.payload, localImagePaths: [...localImagePaths] };
+}
+
+function validateSessionManifest(bundle, expectedVersion) {
+  if (
+    bundle?.format !== SESSION_BUNDLE_FORMAT ||
+    bundle?.version !== expectedVersion ||
+    bundle?.provider !== "codex"
+  ) {
+    throw httpError("Session bundle format or version is not supported", 400);
+  }
+  if (!bundle.thread || typeof bundle.thread.id !== "string") {
+    throw httpError("Session bundle is missing thread metadata", 400);
+  }
+  if (
+    bundle.thread.name !== null &&
+    bundle.thread.name !== undefined &&
+    (typeof bundle.thread.name !== "string" || Buffer.byteLength(bundle.thread.name) > 4096)
+  ) {
+    throw httpError("Session bundle contains an invalid thread name", 400);
+  }
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function imageTypeFromBytes(bytes) {
+  for (const type of IMAGE_TYPES.keys()) {
+    if (imageBytesMatchType(type, bytes)) return type;
+  }
+  return null;
+}
+
+async function collectSessionAssets(paths) {
+  if (paths.length > MAX_SESSION_ASSET_COUNT) {
+    throw httpError(`Session references more than ${MAX_SESSION_ASSET_COUNT} local images`, 413);
+  }
+  const byDigest = new Map();
+  const missingAssets = [];
+  let totalSize = 0;
+  for (const originalPath of paths) {
+    try {
+      const resolvedPath = await realpath(originalPath);
+      const before = await stat(resolvedPath);
+      if (!before.isFile()) throw new Error("not a file");
+      if (before.size > MAX_SESSION_ASSET_BYTES) throw new Error("larger than 25 MiB");
+      const bytes = await readFile(resolvedPath);
+      const after = await stat(resolvedPath);
+      if (
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs ||
+        before.ino !== after.ino
+      ) {
+        throw httpError(`Image changed while exporting: ${originalPath}`, 409);
+      }
+      const type = imageTypeFromBytes(bytes);
+      if (!type) throw new Error("unsupported image data");
+      const digest = sha256(bytes);
+      const existing = byDigest.get(digest);
+      if (existing) {
+        existing.paths.push(originalPath);
+        continue;
+      }
+      totalSize += bytes.length;
+      if (totalSize > MAX_SESSION_ASSET_TOTAL_BYTES) {
+        throw httpError("Images referenced by this session are larger than 128 MiB in total", 413);
+      }
+      byDigest.set(digest, {
+        bytes,
+        name: basename(originalPath).slice(0, 1024) || `image${IMAGE_TYPES.get(type)}`,
+        paths: [originalPath],
+        sha256: digest,
+        size: bytes.length,
+        type,
+      });
+    } catch (error) {
+      if (error.status) throw error;
+      missingAssets.push({ path: originalPath, reason: error.message || "unavailable" });
+    }
+  }
+  return { assets: [...byDigest.values()], missingAssets };
+}
+
+function buildSessionBundle(manifest, rolloutBytes, assets) {
+  const headerBytes = Buffer.from(JSON.stringify({
+    ...manifest,
+    rolloutSize: rolloutBytes.length,
+    assets: assets.map(({ bytes, ...asset }) => asset),
+  }));
+  if (headerBytes.length > 4 * 1024 * 1024) {
+    throw httpError("Session asset manifest is too large", 413);
+  }
+  const headerSize = Buffer.allocUnsafe(4);
+  headerSize.writeUInt32BE(headerBytes.length);
+  const unpacked = Buffer.concat([
+    SESSION_BUNDLE_MAGIC,
+    headerSize,
+    headerBytes,
+    rolloutBytes,
+    ...assets.map((asset) => asset.bytes),
+  ]);
+  if (unpacked.length > MAX_SESSION_BUNDLE_BYTES) {
+    throw httpError("Session bundle is too large", 413);
+  }
+  return gzipSync(unpacked, { level: 9 });
+}
+
+function parseBinarySessionBundle(unpacked) {
+  const sizeOffset = SESSION_BUNDLE_MAGIC.length;
+  if (unpacked.length < sizeOffset + 4) throw httpError("Session bundle is truncated", 400);
+  const headerSize = unpacked.readUInt32BE(sizeOffset);
+  if (headerSize < 2 || headerSize > 4 * 1024 * 1024) {
+    throw httpError("Session bundle manifest is invalid", 400);
+  }
+  const headerStart = sizeOffset + 4;
+  const headerEnd = headerStart + headerSize;
+  if (headerEnd > unpacked.length) throw httpError("Session bundle is truncated", 400);
+  let bundle;
+  try {
+    bundle = JSON.parse(unpacked.toString("utf8", headerStart, headerEnd));
+  } catch {
+    throw httpError("Session bundle manifest contains invalid JSON", 400);
+  }
+  validateSessionManifest(bundle, SESSION_BUNDLE_VERSION);
+  if (
+    !Number.isSafeInteger(bundle.rolloutSize) ||
+    bundle.rolloutSize < 1 ||
+    bundle.rolloutSize > MAX_SESSION_FILE_BYTES
+  ) {
+    throw httpError("Session bundle contains an invalid history size", 400);
+  }
+  if (!Array.isArray(bundle.assets) || bundle.assets.length > MAX_SESSION_ASSET_COUNT) {
+    throw httpError("Session bundle contains an invalid asset list", 400);
+  }
+  let offset = headerEnd;
+  const rolloutEnd = offset + bundle.rolloutSize;
+  if (rolloutEnd > unpacked.length) throw httpError("Session history is truncated", 400);
+  const rolloutBytes = unpacked.subarray(offset, rolloutEnd);
+  const rollout = rolloutBytes.toString("utf8");
+  const { metadata: sessionMetadata } = validateRollout(rollout, bundle.thread.id);
+  offset = rolloutEnd;
+  let totalAssetSize = 0;
+  const sourcePaths = new Set();
+  const assets = [];
+  for (const metadata of bundle.assets) {
+    if (
+      !metadata ||
+      !Array.isArray(metadata.paths) ||
+      metadata.paths.length < 1 ||
+      metadata.paths.some((path) => typeof path !== "string" || path.length > 4096) ||
+      typeof metadata.name !== "string" ||
+      metadata.name.length > 1024 ||
+      !IMAGE_TYPES.has(metadata.type) ||
+      !Number.isSafeInteger(metadata.size) ||
+      metadata.size < 1 ||
+      metadata.size > MAX_SESSION_ASSET_BYTES ||
+      !/^[0-9a-f]{64}$/.test(metadata.sha256)
+    ) {
+      throw httpError("Session bundle contains invalid image metadata", 400);
+    }
+    for (const path of metadata.paths) {
+      if (sourcePaths.has(path)) throw httpError("Session bundle contains duplicate image paths", 400);
+      sourcePaths.add(path);
+    }
+    totalAssetSize += metadata.size;
+    if (totalAssetSize > MAX_SESSION_ASSET_TOTAL_BYTES) {
+      throw httpError("Session bundle images are too large", 413);
+    }
+    const end = offset + metadata.size;
+    if (end > unpacked.length) throw httpError("Session image data is truncated", 400);
+    const bytes = unpacked.subarray(offset, end);
+    if (sha256(bytes) !== metadata.sha256 || !imageBytesMatchType(metadata.type, bytes)) {
+      throw httpError("Session image data does not match its manifest", 400);
+    }
+    assets.push({ ...metadata, bytes });
+    offset = end;
+  }
+  if (offset !== unpacked.length) throw httpError("Session bundle contains unexpected data", 400);
+  const missingAssets = Array.isArray(bundle.missingAssets)
+    ? bundle.missingAssets.filter(
+        (asset) =>
+          asset &&
+          typeof asset.path === "string" &&
+          typeof asset.reason === "string",
+      ).slice(0, MAX_SESSION_ASSET_COUNT)
+    : [];
+  return { assets, bundle, missingAssets, rollout, rolloutBytes, sessionMetadata };
+}
+
+function parseLegacySessionBundle(unpacked) {
+  let bundle;
+  try {
+    bundle = JSON.parse(unpacked.toString("utf8"));
+  } catch {
+    throw httpError("Session bundle contains invalid JSON", 400);
+  }
+  validateSessionManifest(bundle, LEGACY_SESSION_BUNDLE_VERSION);
+  if (typeof bundle.rollout !== "string") {
+    throw httpError("Session bundle is missing its history", 400);
+  }
+  const { metadata: sessionMetadata } = validateRollout(bundle.rollout, bundle.thread.id);
+  return {
+    assets: [],
+    bundle,
+    missingAssets: [],
+    rollout: bundle.rollout,
+    rolloutBytes: Buffer.from(bundle.rollout, "utf8"),
+    sessionMetadata,
+  };
+}
+
+function parseSessionBundle(bytes) {
+  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) {
+    throw httpError("Session file must be a gzip-compressed .codex-session bundle", 400);
+  }
+  let unpacked;
+  try {
+    unpacked = gunzipSync(bytes, { maxOutputLength: MAX_SESSION_BUNDLE_BYTES });
+  } catch (error) {
+    if (error?.code === "ERR_BUFFER_TOO_LARGE") {
+      throw httpError("Uncompressed session bundle is too large", 413);
+    }
+    throw httpError("Session file is not a valid gzip bundle", 400);
+  }
+  return unpacked.subarray(0, SESSION_BUNDLE_MAGIC.length).equals(SESSION_BUNDLE_MAGIC)
+    ? parseBinarySessionBundle(unpacked)
+    : parseLegacySessionBundle(unpacked);
+}
+
+async function findStoredSessionPath(threadId) {
+  const matches = [];
+  async function visit(directory, depth = 0) {
+    if (depth > 5) return;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(path, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith(`-${threadId}.jsonl`)) {
+        matches.push(path);
+      }
+    }
+  }
+  await visit(CODEX_SESSIONS_DIR);
+  await visit(CODEX_ARCHIVED_SESSIONS_DIR);
+  return matches[0] || null;
+}
+
+async function resolveImportedCwd(req, originalCwd) {
+  const encoded = req.headers["x-codex-web-cwd"];
+  let cwd = originalCwd;
+  if (encoded !== undefined) {
+    if (typeof encoded !== "string" || encoded.length > 4096) {
+      throw httpError("X-Codex-Web-Cwd is invalid", 400);
+    }
+    try {
+      cwd = decodeURIComponent(encoded);
+    } catch {
+      throw httpError("X-Codex-Web-Cwd must be URL-encoded", 400);
+    }
+  }
+  if (typeof cwd !== "string" || !isAbsolute(cwd)) {
+    throw httpError("Choose an absolute destination working directory before importing", 400);
+  }
+  let info;
+  try {
+    info = await stat(cwd);
+  } catch {
+    throw httpError("The destination working directory does not exist", 400);
+  }
+  if (!info.isDirectory()) {
+    throw httpError("The destination working directory is not a directory", 400);
+  }
+  return resolve(cwd);
+}
+
+function importedAssetTargets(assets) {
+  const pathMap = new Map();
+  const targets = assets.map((asset) => {
+    const destination = join(
+      UPLOAD_DIR,
+      `session-${asset.sha256}${IMAGE_TYPES.get(asset.type)}`,
+    );
+    for (const sourcePath of asset.paths) pathMap.set(sourcePath, destination);
+    return { ...asset, destination };
+  });
+  return { pathMap, targets };
+}
+
+function rewriteRolloutImagePaths(rollout, pathMap) {
+  if (pathMap.size === 0) return { rollout, updatedPaths: 0 };
+  let updatedPaths = 0;
+  const pieces = rollout.split(/(\r?\n)/);
+  for (let index = 0; index < pieces.length; index += 2) {
+    const line = pieces[index];
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    if (
+      record?.type !== "event_msg" ||
+      record.payload?.type !== "user_message" ||
+      !Array.isArray(record.payload.local_images)
+    ) {
+      continue;
+    }
+    let changed = false;
+    record.payload.local_images = record.payload.local_images.map((path) => {
+      const replacement = pathMap.get(path);
+      if (!replacement) return path;
+      changed = true;
+      updatedPaths += 1;
+      return replacement;
+    });
+    if (changed) pieces[index] = JSON.stringify(record);
+  }
+  return { rollout: pieces.join(""), updatedPaths };
+}
+
+async function writeImportedAssets(targets) {
+  if (targets.length === 0) return;
+  await mkdir(UPLOAD_DIR, { recursive: true, mode: 0o700 });
+  await chmod(UPLOAD_DIR, 0o700);
+  for (const asset of targets) {
+    try {
+      await writeFile(asset.destination, asset.bytes, { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      const existing = await readFile(asset.destination);
+      if (!existing.equals(asset.bytes)) {
+        throw httpError("An imported image conflicts with an existing cache file", 409);
+      }
+    }
+    await chmod(asset.destination, 0o600);
+  }
+}
+
+async function exportSession(res, threadId) {
+  if (!CODEX_SESSION_ID_PATTERN.test(threadId) || threadId.startsWith("claude:")) {
+    throw httpError("A valid Codex thread id is required", 400);
+  }
+  const result = await providerRpc("thread/read", {
+    threadId,
+    includeTurns: true,
+    provider: "codex",
+  });
+  const thread = result?.thread;
+  if (!thread || thread.id !== threadId) throw httpError("Session was not found", 404);
+  if (
+    thread.status?.type === "active" ||
+    (thread.turns || []).some((turn) => turn.status === "inProgress")
+  ) {
+    throw httpError("Wait for the current turn to finish before downloading this session", 409);
+  }
+  const rolloutPath = await allowedRolloutPath(thread.path);
+  const before = await stat(rolloutPath);
+  if (!before.isFile()) throw httpError("Codex session path is not a file", 409);
+  if (before.size > MAX_SESSION_FILE_BYTES) throw httpError("Session history is too large", 413);
+  const rolloutBytes = await readFile(rolloutPath);
+  const after = await stat(rolloutPath);
+  if (
+    before.size !== after.size ||
+    before.mtimeMs !== after.mtimeMs ||
+    before.ino !== after.ino
+  ) {
+    throw httpError("Session changed while it was being downloaded; try again", 409);
+  }
+  const rollout = rolloutBytes.toString("utf8");
+  const { metadata: sessionMetadata, localImagePaths } = validateRollout(rollout, threadId);
+  const { assets, missingAssets } = await collectSessionAssets(localImagePaths);
+  const manifest = {
+    format: SESSION_BUNDLE_FORMAT,
+    version: SESSION_BUNDLE_VERSION,
+    provider: "codex",
+    exportedAt: new Date().toISOString(),
+    thread: {
+      id: threadId,
+      name: typeof thread.name === "string" ? thread.name : null,
+      createdAt: thread.createdAt ?? null,
+      updatedAt: thread.updatedAt ?? null,
+      cwd: thread.cwd || sessionMetadata.cwd || null,
+      model: thread.model || null,
+    },
+    missingAssets,
+  };
+  const body = buildSessionBundle(manifest, rolloutBytes, assets);
+  if (body.length > MAX_SESSION_UPLOAD_BYTES) {
+    throw httpError("Compressed session bundle is too large to import", 413);
+  }
+  res.writeHead(200, {
+    "Content-Type": "application/x-codex-session",
+    "Content-Disposition": `attachment; filename="codex-session-${threadId}.codex-session"`,
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-Codex-Session-Asset-Count": String(assets.length),
+    "X-Codex-Session-Missing-Asset-Count": String(missingAssets.length),
+  });
+  res.end(body);
+}
+
+async function importSession(req) {
+  const contentType = (req.headers["content-type"] || "").split(";", 1)[0].trim().toLowerCase();
+  if (
+    ![
+      "application/x-codex-session",
+      "application/gzip",
+      "application/octet-stream",
+    ].includes(contentType)
+  ) {
+    throw httpError("Content-Type must be a Codex session or gzip file", 415);
+  }
+  const bytes = await readLimitedBody(req, MAX_SESSION_UPLOAD_BYTES, "Session upload");
+  const {
+    assets,
+    bundle,
+    missingAssets,
+    rollout,
+    rolloutBytes: originalRolloutBytes,
+    sessionMetadata,
+  } = parseSessionBundle(bytes);
+  const cwd = await resolveImportedCwd(req, bundle.thread.cwd || sessionMetadata.cwd);
+  const { pathMap, targets } = importedAssetTargets(assets);
+  const rewritten = rewriteRolloutImagePaths(rollout, pathMap);
+  const rolloutBytes = Buffer.from(rewritten.rollout, "utf8");
+  const existingPath = await findStoredSessionPath(bundle.thread.id);
+  if (existingPath) {
+    const existing = await readFile(existingPath);
+    const matchesOriginal = existing.equals(originalRolloutBytes);
+    const matchesRewritten = existing.equals(rolloutBytes);
+    if (!matchesOriginal && !matchesRewritten) {
+      throw httpError("A different session with this id already exists", 409);
+    }
+    if (matchesRewritten) await writeImportedAssets(targets);
+    return {
+      status: 200,
+      result: {
+        threadId: bundle.thread.id,
+        name: bundle.thread.name || null,
+        cwd,
+        alreadyExists: true,
+        assetsImported: matchesRewritten ? assets.length : 0,
+        assetPathsUpdated: matchesRewritten ? rewritten.updatedPaths : 0,
+        missingAssets: missingAssets.length,
+      },
+    };
+  }
+
+  const now = new Date();
+  const directory = join(
+    CODEX_SESSIONS_DIR,
+    String(now.getUTCFullYear()),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+  );
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  await writeImportedAssets(targets);
+  const timestamp = now.toISOString().replaceAll(":", "-");
+  const destination = join(directory, `rollout-${timestamp}-${bundle.thread.id}.jsonl`);
+  try {
+    await writeFile(destination, rolloutBytes, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (error.code === "EEXIST") throw httpError("Session destination already exists", 409);
+    await unlink(destination).catch(() => {});
+    throw error;
+  }
+  return {
+    status: 201,
+    result: {
+      threadId: bundle.thread.id,
+      name: bundle.thread.name || null,
+      cwd,
+      alreadyExists: false,
+      assetsImported: assets.length,
+      assetPathsUpdated: rewritten.updatedPaths,
+      missingAssets: missingAssets.length,
+    },
+  };
 }
 
 function requestImageType(req) {
@@ -825,6 +1421,16 @@ const server = createServer(async (req, res) => {
         cwd: DEFAULT_CWD,
         port: PORT,
       });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/sessions/export") {
+      await exportSession(res, url.searchParams.get("threadId") || "");
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/sessions/import") {
+      const imported = await importSession(req);
+      return json(res, imported.status, imported.result);
     }
 
     if (req.method === "POST" && url.pathname === "/api/uploads/images") {
