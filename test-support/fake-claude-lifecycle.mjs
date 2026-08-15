@@ -23,6 +23,14 @@ function emit(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+const USAGE = {
+  input_tokens: 10,
+  cache_creation_input_tokens: 200,
+  cache_read_input_tokens: 1_000,
+  output_tokens: 40,
+};
+const MODEL_USAGE = { "claude-sonnet-5": { contextWindow: 200_000 } };
+
 let prompt = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -110,11 +118,24 @@ process.stdin.on("end", () => {
     },
   });
   emit({
+    type: "rate_limit_event",
+    session_id: sessionId,
+    rate_limit_info: {
+      status: "allowed",
+      resetsAt: 1_786_119_000,
+      rateLimitType: "five_hour",
+      isUsingOverage: false,
+    },
+  });
+  emit({
     type: "result",
     subtype: "success",
     is_error: false,
     result: text,
     session_id: sessionId,
+    duration_ms: 4_000,
+    usage: USAGE,
+    modelUsage: MODEL_USAGE,
   });
 
   if (prompt.includes("__delay_result__")) {

@@ -33,7 +33,7 @@ many terminals.
 - Exports an idle Codex conversation and its attached local images as a
   portable `.codex-session` file, then restores image paths when importing it
   into another Codex Web installation.
-- Supports native Codex Plan mode and persistent Goal mode, including goal
+- Supports Plan mode and persistent Goal mode for both providers, including goal
   pause, resume, edit, clear, and progress state.
 - Offers browser dictation that turns speech into editable prompt text.
 - Adaptively structures multi-part Codex answers with semantic Markdown

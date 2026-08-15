@@ -502,3 +502,160 @@ test("thread creation rejects malformed IDs, permissions, and non-directories", 
     /directory/,
   );
 });
+
+test("a completed turn reports context usage and the active rate limit window", async (t) => {
+  const root = await mkdtemp(join(os.tmpdir(), "codex-web-claude-usage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  configureFake(t, root);
+  const events = [];
+  const provider = new ClaudeProvider(providerOptions(root, events));
+  t.after(() => provider.stop());
+  await provider.load();
+  const { thread } = await provider.rpc("thread/start", { cwd: root });
+
+  await provider.rpc("turn/start", {
+    threadId: thread.id,
+    input: [{ type: "text", text: "سلام" }],
+  });
+  await waitForTurn(provider, thread.id, "completed");
+
+  const usageEvent = events.find(
+    (event) => event.method === "thread/tokenUsage/updated",
+  );
+  assert.equal(usageEvent.params.tokenUsage.last.totalTokens, 1_250);
+  assert.equal(usageEvent.params.tokenUsage.modelContextWindow, 200_000);
+  assert.equal(usageEvent.params.provider, "claude");
+
+  // The snapshot survives a reload so an already-open conversation keeps its bar.
+  const reread = await provider.rpc("thread/read", { threadId: thread.id });
+  assert.equal(reread.tokenUsage.last.totalTokens, 1_250);
+
+  const limits = await provider.rpc("account/rateLimits/read", {});
+  const bucket = limits.rateLimitsByLimitId.claude;
+  assert.equal(bucket.usageUnavailable, true);
+  assert.equal(bucket.windowDurationMins, 300);
+  assert.equal(bucket.resetsAt, 1_786_119_000);
+  assert.equal(bucket.rateLimitReachedType, undefined);
+});
+
+test("compact runs as a control turn without adding chat messages", async (t) => {
+  const root = await mkdtemp(join(os.tmpdir(), "codex-web-claude-compact-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const logFile = configureFake(t, root);
+  const events = [];
+  const provider = new ClaudeProvider(providerOptions(root, events));
+  t.after(() => provider.stop());
+  await provider.load();
+  const { thread } = await provider.rpc("thread/start", { cwd: root });
+
+  await assert.rejects(
+    provider.rpc("thread/compact/start", { threadId: thread.id }),
+    /هنوز پیامی ندارد/,
+  );
+
+  await provider.rpc("turn/start", {
+    threadId: thread.id,
+    input: [{ type: "text", text: "سلام" }],
+  });
+  await waitForTurn(provider, thread.id, "completed");
+
+  await provider.rpc("thread/compact/start", { threadId: thread.id });
+  const compactTurn = await waitFor(async () => {
+    const result = await provider.rpc("thread/read", { threadId: thread.id });
+    const turn = result.thread.turns.at(-1);
+    return turn?.status === "completed" && turn.items[0]?.type === "contextCompaction"
+      ? turn
+      : null;
+  });
+
+  assert.deepEqual(
+    compactTurn.items.map((item) => item.type),
+    ["contextCompaction"],
+  );
+  assert.equal(compactTurn.items[0].status, "completed");
+  const deltas = events.filter(
+    (event) =>
+      event.method === "item/agentMessage/delta" &&
+      event.params.itemId === compactTurn.items[0].id,
+  );
+  assert.deepEqual(deltas, []);
+
+  const prompts = (await readLog(logFile))
+    .filter((entry) => entry.event === "start")
+    .map((entry) => entry.prompt);
+  assert.equal(prompts.at(-1), "/compact");
+});
+
+test("an active goal is restated to the CLI and accumulates progress", async (t) => {
+  const root = await mkdtemp(join(os.tmpdir(), "codex-web-claude-goal-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const logFile = configureFake(t, root);
+  const events = [];
+  const provider = new ClaudeProvider(providerOptions(root, events));
+  t.after(() => provider.stop());
+  await provider.load();
+  const { thread } = await provider.rpc("thread/start", { cwd: root });
+
+  assert.deepEqual(await provider.rpc("thread/goal/get", { threadId: thread.id }), {
+    goal: null,
+  });
+  await assert.rejects(
+    provider.rpc("thread/goal/set", { threadId: thread.id, objective: "   " }),
+    /خالی/,
+  );
+  await assert.rejects(
+    provider.rpc("thread/goal/set", { threadId: thread.id, objective: "x", status: "done" }),
+    /وضعیت هدف نامعتبر/,
+  );
+
+  const { goal } = await provider.rpc("thread/goal/set", {
+    threadId: thread.id,
+    objective: "همهٔ تست‌ها سبز شوند",
+    status: "active",
+  });
+  assert.equal(goal.status, "active");
+  assert.equal(goal.tokensUsed, 0);
+
+  await provider.rpc("turn/start", {
+    threadId: thread.id,
+    input: [{ type: "text", text: "ادامه بده" }],
+    developerInstructions: "به فارسی پاسخ بده",
+  });
+  await waitForTurn(provider, thread.id, "completed");
+
+  const start = (await readLog(logFile)).filter((entry) => entry.event === "start").at(-1);
+  const appended = start.args[start.args.indexOf("--append-system-prompt") + 1];
+  assert.match(appended, /به فارسی پاسخ بده/);
+  assert.match(appended, /همهٔ تست‌ها سبز شوند/);
+
+  const progressed = await waitFor(async () => {
+    const result = await provider.rpc("thread/goal/get", { threadId: thread.id });
+    return result.goal?.tokensUsed > 0 ? result.goal : null;
+  });
+  assert.equal(progressed.tokensUsed, 1_250);
+  assert.equal(progressed.timeUsedSeconds, 4);
+
+  // A paused goal stops shaping the conversation.
+  await provider.rpc("thread/goal/set", { threadId: thread.id, status: "paused" });
+  await provider.rpc("turn/start", {
+    threadId: thread.id,
+    input: [{ type: "text", text: "فقط یک سؤال" }],
+  });
+  await waitForTurn(provider, thread.id, "completed");
+  const paused = (await readLog(logFile)).filter((entry) => entry.event === "start").at(-1);
+  assert.equal(paused.args.includes("--append-system-prompt"), false);
+
+  await provider.rpc("thread/goal/clear", { threadId: thread.id });
+  assert.deepEqual(await provider.rpc("thread/goal/get", { threadId: thread.id }), {
+    goal: null,
+  });
+
+  // The goal survives a provider restart from the same store.
+  await provider.rpc("thread/goal/set", { threadId: thread.id, objective: "دوباره" });
+  await provider.stop();
+  const restarted = new ClaudeProvider(providerOptions(root, []));
+  t.after(() => restarted.stop());
+  await restarted.load();
+  const restored = await restarted.rpc("thread/goal/get", { threadId: thread.id });
+  assert.equal(restored.goal.objective, "دوباره");
+});

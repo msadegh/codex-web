@@ -37,6 +37,7 @@ const PERMISSION_MODES = new Set([
   "plan",
 ]);
 const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const GOAL_STATUSES = new Set(["active", "paused"]);
 
 const MODEL_OPTIONS = [
   { id: "sonnet", model: "sonnet", displayName: "Claude Sonnet" },
@@ -196,8 +197,30 @@ function storedNativeMetadata(thread) {
   return {
     id: thread.id,
     ...(thread.nativeName ? { name: thread.nativeName } : {}),
+    ...(thread.goal ? { goal: thread.goal } : {}),
     archived: Boolean(thread.archived),
     updatedAt: thread.updatedAt || nowSeconds(),
+  };
+}
+
+// Claude Code has no persistent goal RPC, so an active goal is restated as a
+// system prompt on every turn of the conversation.
+function goalInstruction(objective) {
+  return [
+    "Persistent goal for this conversation:",
+    objective,
+    "Keep working toward this goal on every turn until it is met, even when the user's message does not mention it. Say so explicitly once it is met.",
+  ].join("\n");
+}
+
+function normalizeGoal(value) {
+  const objective = String(value?.objective || "").trim();
+  if (!objective) return null;
+  return {
+    objective,
+    status: GOAL_STATUSES.has(value?.status) ? value.status : "active",
+    tokensUsed: Math.max(0, Math.trunc(Number(value?.tokensUsed) || 0)),
+    timeUsedSeconds: Math.max(0, Math.trunc(Number(value?.timeUsedSeconds) || 0)),
   };
 }
 
@@ -243,6 +266,73 @@ function threadView(thread) {
     updatedAt: thread.updatedAt,
     status: thread.status || { type: "idle" },
     archived: Boolean(thread.archived),
+  };
+}
+
+const RATE_LIMIT_WINDOW_MINUTES = {
+  five_hour: 300,
+  seven_day: 10_080,
+  monthly: 43_200,
+  opus_seven_day: 10_080,
+};
+
+// Claude Code reports which quota window is active and when it resets, but no
+// percentage, so the snapshot carries no usage windows for the UI to chart.
+function rateLimitsFromEvent(info) {
+  if (!info || typeof info !== "object") return null;
+  const resetsAt = Number(info.resetsAt);
+  const rateLimitType = String(info.rateLimitType || "");
+  const allowed = String(info.status || "allowed") === "allowed";
+  return {
+    rateLimitsByLimitId: {
+      claude: {
+        limitId: "claude",
+        limitName: "Claude",
+        usageUnavailable: true,
+        allowed,
+        isUsingOverage: Boolean(info.isUsingOverage),
+        ...(rateLimitType ? { rateLimitType } : {}),
+        ...(RATE_LIMIT_WINDOW_MINUTES[rateLimitType]
+          ? { windowDurationMins: RATE_LIMIT_WINDOW_MINUTES[rateLimitType] }
+          : {}),
+        ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}),
+        ...(allowed ? {} : { rateLimitReachedType: "rate_limit_reached" }),
+      },
+    },
+  };
+}
+
+// Maps the `usage` block of a stream-json `result` message onto the token
+// usage shape the web UI already renders for Codex.
+function tokenUsageFromResult(message) {
+  const usage = message?.usage;
+  if (!usage || typeof usage !== "object") return null;
+  const totalTokens =
+    (Number(usage.input_tokens) || 0) +
+    (Number(usage.cache_creation_input_tokens) || 0) +
+    (Number(usage.cache_read_input_tokens) || 0) +
+    (Number(usage.output_tokens) || 0);
+  if (totalTokens <= 0) return null;
+  const contextWindows = Object.values(message.modelUsage || {})
+    .map((entry) => Number(entry?.contextWindow) || 0)
+    .filter((value) => value > 0);
+  return {
+    last: { totalTokens },
+    ...(contextWindows.length
+      ? { modelContextWindow: Math.max(...contextWindows) }
+      : {}),
+  };
+}
+
+function normalizeTokenUsage(value) {
+  const totalTokens = Number(value?.last?.totalTokens);
+  if (!Number.isFinite(totalTokens) || totalTokens <= 0) return null;
+  const windowSize = Number(value?.modelContextWindow);
+  return {
+    last: { totalTokens },
+    ...(Number.isFinite(windowSize) && windowSize > 0
+      ? { modelContextWindow: windowSize }
+      : {}),
   };
 }
 
@@ -385,6 +475,7 @@ export class ClaudeProvider {
     this.discoveryPromise = null;
     this.lastDiscoveryAt = 0;
     this.binaryCheck = { at: 0, available: false, promise: null };
+    this.rateLimits = null;
     this.stopping = false;
   }
 
@@ -419,6 +510,10 @@ export class ClaudeProvider {
     } catch {
       thread.effort = "";
     }
+    thread.tokenUsage = normalizeTokenUsage(thread.tokenUsage);
+    if (!thread.tokenUsage) delete thread.tokenUsage;
+    thread.goal = normalizeGoal(thread.goal);
+    if (!thread.goal) delete thread.goal;
     thread.turns = Array.isArray(thread.turns) ? thread.turns : [];
     thread.createdAt = Number(thread.createdAt) || nowSeconds();
     thread.updatedAt = Number(thread.updatedAt) || thread.createdAt;
@@ -455,9 +550,11 @@ export class ClaudeProvider {
     for (const value of Array.isArray(data.nativeMetadata) ? data.nativeMetadata : []) {
       if (!SESSION_ID_PATTERN.test(String(value?.id || ""))) continue;
       const id = String(value.id);
+      const goal = normalizeGoal(value.goal);
       const incoming = {
         id,
         ...(typeof value.name === "string" && value.name ? { name: value.name } : {}),
+        ...(goal ? { goal } : {}),
         archived: Boolean(value.archived),
         updatedAt: Number(value.updatedAt) || 0,
       };
@@ -481,6 +578,8 @@ export class ClaudeProvider {
           typeof metadata.name === "string" && metadata.name ? metadata.name : "";
         nativeThread.name =
           nativeThread.nativeName || nativeThread.name || "گفتگوی Claude";
+        if (metadata.goal) nativeThread.goal = metadata.goal;
+        else delete nativeThread.goal;
         nativeThread.archived = Boolean(metadata.archived);
         nativeThread.updatedAt = Math.max(
           nativeThread.updatedAt || 0,
@@ -735,6 +834,8 @@ export class ClaudeProvider {
     switch (method) {
       case "account/read":
         return { account: null };
+      case "account/rateLimits/read":
+        return this.rateLimits || { rateLimitsByLimitId: {} };
       case "model/list":
         return { data: MODEL_OPTIONS, nextCursor: null };
       case "thread/list":
@@ -749,6 +850,14 @@ export class ClaudeProvider {
         return this.archiveThread(params, method === "thread/archive");
       case "thread/setName":
         return this.setName(params);
+      case "thread/compact/start":
+        return this.compactThread(params);
+      case "thread/goal/get":
+        return { goal: this.#requireThread(params.threadId).goal || null };
+      case "thread/goal/set":
+        return this.setGoal(params);
+      case "thread/goal/clear":
+        return this.clearGoal(params);
       case "turn/start":
         return this.startTurn(params);
       case "turn/interrupt":
@@ -815,7 +924,10 @@ export class ClaudeProvider {
         turns.push(activeTurn);
       }
     }
-    return { thread: { ...threadView(thread), turns } };
+    return {
+      thread: { ...threadView(thread), turns },
+      tokenUsage: thread.tokenUsage || null,
+    };
   }
 
   async discoverNativeThreads({ force = false } = {}) {
@@ -855,6 +967,7 @@ export class ClaudeProvider {
           );
           existing.nativeName = metadata?.name || existing.nativeName || "";
           existing.name = existing.nativeName || defaultName;
+          if (metadata?.goal) existing.goal = metadata.goal;
           existing.archived = metadata?.archived ?? existing.archived;
           existing.sessionInitialized = true;
           continue;
@@ -865,6 +978,7 @@ export class ClaudeProvider {
           native: true,
           nativeName: metadata?.name || "",
           name: metadata?.name || defaultName,
+          ...(metadata?.goal ? { goal: metadata.goal } : {}),
           cwd: summary.cwd || process.cwd(),
           model: "",
           permissionMode: "",
@@ -1040,7 +1154,64 @@ export class ClaudeProvider {
     return { thread: threadView(thread) };
   }
 
-  async startTurn(params) {
+  #requireThread(value) {
+    const thread = this.threads.get(rawId(value));
+    if (!thread) throw new Error("گفتگوی Claude پیدا نشد");
+    return thread;
+  }
+
+  async #persistGoal(thread) {
+    if (thread.native) this.#markNativeDirty(thread, ["goal"]);
+    else this.#markThreadDirty(thread, ["goal"]);
+    await this.#queuePersist();
+    this.notify("thread/goal/updated", {
+      threadId: publicId(thread.id),
+      goal: thread.goal || null,
+    });
+  }
+
+  async setGoal(params) {
+    const thread = this.#requireThread(params.threadId);
+    const objective =
+      params.objective === undefined
+        ? thread.goal?.objective || ""
+        : String(params.objective || "").trim();
+    if (!objective) throw new Error("هدف نمی‌تواند خالی باشد");
+    const status =
+      params.status === undefined ? thread.goal?.status || "active" : params.status;
+    if (!GOAL_STATUSES.has(status)) {
+      throw new Error(`وضعیت هدف نامعتبر است: ${status}`);
+    }
+    // Editing the objective restarts the budget the same way Codex does.
+    const carryUsage = objective === thread.goal?.objective ? thread.goal : null;
+    thread.goal = normalizeGoal({ ...carryUsage, objective, status });
+    await this.#persistGoal(thread);
+    return { goal: thread.goal };
+  }
+
+  async clearGoal(params) {
+    const thread = this.#requireThread(params.threadId);
+    delete thread.goal;
+    await this.#persistGoal(thread);
+    return {};
+  }
+
+  async compactThread(params) {
+    const thread = this.#requireThread(params.threadId);
+    if (!thread.native && !thread.sessionInitialized) {
+      throw new Error("این گفتگو هنوز پیامی ندارد که فشرده شود");
+    }
+    await this.startTurn(
+      { threadId: params.threadId, input: [{ type: "text", text: "/compact" }] },
+      { controlItemType: "contextCompaction" },
+    );
+    return {};
+  }
+
+  // `controlItemType` runs the turn as a CLI control command (for example
+  // `/compact`): the prompt and the reply are not shown as chat messages, the
+  // turn is represented by a single activity item of that type instead.
+  async startTurn(params, { controlItemType = "" } = {}) {
     const thread = this.threads.get(rawId(params.threadId));
     if (!thread) throw new Error("گفتگوی Claude پیدا نشد");
     if (this.processes.has(thread.id)) throw new Error("این گفتگوی Claude در حال اجراست");
@@ -1072,12 +1243,20 @@ export class ClaudeProvider {
       type: "userMessage",
       content: [{ type: "text", text }],
     };
-    const assistantItem = {
-      id: `${turn.id}:assistant`,
-      type: "agentMessage",
-      text: "",
-    };
-    turn.items.push(userItem, assistantItem);
+    const assistantItem = controlItemType
+      ? {
+          id: `${turn.id}:${controlItemType}`,
+          type: controlItemType,
+          status: "inProgress",
+          text: "",
+        }
+      : {
+          id: `${turn.id}:assistant`,
+          type: "agentMessage",
+          text: "",
+        };
+    if (controlItemType) turn.items.push(assistantItem);
+    else turn.items.push(userItem, assistantItem);
 
     let resolveDone;
     const done = new Promise((resolveDonePromise) => {
@@ -1215,17 +1394,20 @@ export class ClaudeProvider {
       threadId: publicId(thread.id),
       turn: { id: turn.id, status: "inProgress" },
     });
-    this.notify("item/started", {
-      threadId: publicId(thread.id),
-      turnId: turn.id,
-      item: userItem,
-    });
+    if (!controlItemType) {
+      this.notify("item/started", {
+        threadId: publicId(thread.id),
+        turnId: turn.id,
+        item: userItem,
+      });
+    }
     this.notify("item/started", {
       threadId: publicId(thread.id),
       turnId: turn.id,
       item: assistantItem,
     });
 
+    processState.controlItemType = controlItemType;
     this.runTurn(thread, turn, assistantItem, text, {
       ...params,
       effort,
@@ -1259,6 +1441,13 @@ export class ClaudeProvider {
       params.effort === undefined ? thread.effort : params.effort,
     );
     if (effort) args.push("--effort", effort);
+    const systemPrompt = [
+      String(params.developerInstructions || "").trim(),
+      thread.goal?.status === "active" ? goalInstruction(thread.goal.objective) : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
     return args;
   }
 
@@ -1382,32 +1571,26 @@ export class ClaudeProvider {
       }
       return;
     }
+    if (message.type === "rate_limit_event") {
+      const rateLimits = rateLimitsFromEvent(message.rate_limit_info);
+      if (rateLimits) {
+        this.rateLimits = rateLimits;
+        this.notify("account/rateLimits/updated", rateLimits);
+      }
+      return;
+    }
     if (message.type === "stream_event") {
       const delta = message.event?.delta || {};
       if (delta.type === "text_delta" && delta.text) {
         processState.partialTextSeen = true;
-        processState.textSeen = true;
-        assistantItem.text += delta.text;
-        this.notify("item/agentMessage/delta", {
-          threadId: publicId(thread.id),
-          turnId: turn.id,
-          itemId: assistantItem.id,
-          delta: delta.text,
-        });
+        this.appendAssistantText(thread, turn, assistantItem, processState, delta.text);
       }
       return;
     }
     if (message.type === "assistant") {
       for (const block of message.message?.content || []) {
         if (block.type === "text" && block.text && !processState.partialTextSeen) {
-          processState.textSeen = true;
-          assistantItem.text += block.text;
-          this.notify("item/agentMessage/delta", {
-            threadId: publicId(thread.id),
-            turnId: turn.id,
-            itemId: assistantItem.id,
-            delta: block.text,
-          });
+          this.appendAssistantText(thread, turn, assistantItem, processState, block.text);
         }
         if (block.type === "tool_use") this.notifyTool(thread, turn, block, processState);
       }
@@ -1462,17 +1645,49 @@ export class ClaudeProvider {
         thread.sessionInitialized = true;
         if (!thread.native) this.#markThreadDirty(thread, ["sessionInitialized"]);
       }
-      if (!processState.textSeen && message.result) {
-        processState.textSeen = true;
-        assistantItem.text += String(message.result);
-        this.notify("item/agentMessage/delta", {
+      const tokenUsage = tokenUsageFromResult(message);
+      if (tokenUsage) {
+        thread.tokenUsage = tokenUsage;
+        if (!thread.native) this.#markThreadDirty(thread, ["tokenUsage"]);
+        this.notify("thread/tokenUsage/updated", {
           threadId: publicId(thread.id),
-          turnId: turn.id,
-          itemId: assistantItem.id,
-          delta: String(message.result),
+          tokenUsage,
         });
       }
+      if (thread.goal?.status === "active" && !processState.controlItemType) {
+        thread.goal.tokensUsed += tokenUsage?.last.totalTokens || 0;
+        thread.goal.timeUsedSeconds += Math.max(
+          0,
+          Math.round((Number(message.duration_ms) || 0) / 1000),
+        );
+        void this.#persistGoal(thread).catch((error) => {
+          this.log(`Could not persist Claude goal progress: ${error.message}`);
+        });
+      }
+      if (!processState.textSeen && message.result) {
+        this.appendAssistantText(
+          thread,
+          turn,
+          assistantItem,
+          processState,
+          String(message.result),
+        );
+      }
     }
+  }
+
+  // Control turns (for example `/compact`) collect the CLI reply but never
+  // stream it into the transcript as an agent message.
+  appendAssistantText(thread, turn, assistantItem, processState, delta) {
+    processState.textSeen = true;
+    assistantItem.text += delta;
+    if (processState.controlItemType) return;
+    this.notify("item/agentMessage/delta", {
+      threadId: publicId(thread.id),
+      turnId: turn.id,
+      itemId: assistantItem.id,
+      delta,
+    });
   }
 
   notifyTool(thread, turn, block, processState) {
@@ -1515,7 +1730,9 @@ export class ClaudeProvider {
         }
         processState.toolItems.clear();
 
-        if (!assistantItem.text) {
+        if (processState.controlItemType) {
+          assistantItem.status = status;
+        } else if (!assistantItem.text) {
           if (status === "interrupted") assistantItem.text = "پاسخ متوقف شد.";
           else if (status === "failed") assistantItem.text = "اجرای Claude با خطا متوقف شد.";
         }

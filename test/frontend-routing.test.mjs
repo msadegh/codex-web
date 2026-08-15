@@ -1016,7 +1016,7 @@ test(
 );
 
 test(
-  "Claude conversations hide unsupported commands and keep them out of RPC",
+  "Claude conversations expose the provider-backed commands and run them over RPC",
   { concurrency: false },
   async (t) => {
     const now = Math.floor(Date.now() / 1000);
@@ -1050,7 +1050,16 @@ test(
         return jsonResponse({ result: { data: [thread], nextCursor: null } });
       }
       if (request.method === "thread/resume") {
-        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+        return jsonResponse({ result: { thread, cwd: thread.cwd, tokenUsage: null } });
+      }
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: null } });
+      }
+      if (request.method === "account/rateLimits/read") {
+        return jsonResponse({ result: { rateLimitsByLimitId: {} } });
+      }
+      if (request.method === "thread/compact/start") {
+        return jsonResponse({ result: {} });
       }
       throw new Error(`Unexpected RPC method: ${request.method}`);
     };
@@ -1070,18 +1079,23 @@ test(
           "#slash-command-options [data-slash-command]",
         ),
       ].map((option) => option.dataset.slashCommand),
-      ["new", "clear", "resume", "status", "model", "permissions", "settings", "help"],
-    );
-
-    typePrompt(window, "/co");
-    assert.equal(
-      window.document.querySelectorAll("#slash-command-options [data-slash-command]")
-        .length,
-      0,
+      [
+        "goal",
+        "plan",
+        "compact",
+        "new",
+        "clear",
+        "resume",
+        "status",
+        "model",
+        "permissions",
+        "settings",
+        "help",
+      ],
     );
 
     const prompt = typePrompt(window, "/compact");
-    assert.equal(window.document.querySelector("#send-message").disabled, true);
+    assert.equal(window.document.querySelector("#send-message").disabled, false);
     const enter = new window.Event("keydown", { bubbles: true, cancelable: true });
     Object.defineProperties(enter, {
       isComposing: { configurable: true, value: false },
@@ -1089,12 +1103,86 @@ test(
       shiftKey: { configurable: true, value: false },
     });
     prompt.dispatchEvent(enter);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(
-      requests.some((request) => request.method === "thread/compact/start"),
-      false,
+    await waitFor(
+      () =>
+        requests.some((request) => request.method === "thread/compact/start") &&
+        prompt.value === "",
+      "Claude compact was not requested",
     );
-    assert.equal(prompt.value, "/compact");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "Plan mode sends Claude turns with the plan permission mode",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "claude:plan-thread",
+      provider: "claude",
+      name: "Claude plan",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const starts = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") {
+        return jsonResponse({
+          cwd: "/workspace",
+          providers: { claude: { ready: true }, codex: { ready: true } },
+          ready: true,
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd, tokenUsage: null } });
+      }
+      if (request.method === "thread/goal/get") {
+        return jsonResponse({ result: { goal: null } });
+      }
+      if (request.method === "turn/start") {
+        starts.push(request.params);
+        return jsonResponse({
+          result: { turn: { id: "turn-plan", status: "inProgress", items: [] } },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=claude%3Aplan-thread",
+    });
+    await waitFor(
+      () => window.document.querySelector("#thread-title").textContent === "Claude plan",
+      "Claude thread was not hydrated",
+    );
+
+    const planOption = window.document.querySelector("#plan-mode-option");
+    assert.equal(planOption.disabled, false);
+    planOption.click();
+    assert.equal(planOption.getAttribute("aria-checked"), "true");
+
+    const prompt = typePrompt(window, "سلام");
+    const enter = new window.Event("keydown", { bubbles: true, cancelable: true });
+    Object.defineProperties(enter, {
+      isComposing: { configurable: true, value: false },
+      key: { configurable: true, value: "Enter" },
+      shiftKey: { configurable: true, value: false },
+    });
+    prompt.dispatchEvent(enter);
+    await waitFor(() => starts.length === 1, "Claude turn was not started");
+    assert.equal(starts[0].permissionMode, "plan");
+    assert.equal(starts[0].collaborationMode, undefined);
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );

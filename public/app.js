@@ -17,24 +17,31 @@ const IMAGE_EXTENSIONS = {
   "image/png": "png",
   "image/webp": "webp",
 };
+// Capabilities each agent CLI can actually back. Slash commands and composer
+// tools are gated on these instead of on the provider name.
+const PROVIDER_CAPABILITIES = {
+  codex: new Set(["plan", "goal", "compact", "context", "instructions"]),
+  claude: new Set(["plan", "goal", "compact", "context", "instructions"]),
+};
+
 const SLASH_COMMANDS = [
   {
     name: "goal",
     label: "Goal mode",
-    description: "تعیین هدفی که Codex در چند نوبت تا رسیدن به نتیجه پیگیری کند",
-    providers: ["codex"],
+    description: "تعیین هدفی که عامل در چند نوبت تا رسیدن به نتیجه پیگیری کند",
+    capability: "goal",
   },
   {
     name: "plan",
     label: "Plan mode",
     description: "روشن یا خاموش‌کردن حالت بررسی و برنامه‌ریزی قبل از اجرا",
-    providers: ["codex"],
+    capability: "plan",
   },
   {
     name: "compact",
     label: "فشرده‌سازی گفتگو",
     description: "خلاصه‌کردن context فعلی و آزادکردن فضای گفتگو",
-    providers: ["codex"],
+    capability: "compact",
   },
   {
     name: "new",
@@ -55,12 +62,6 @@ const SLASH_COMMANDS = [
     name: "status",
     label: "وضعیت گفتگو",
     description: "نمایش شناسه، مدل، دسترسی و مصرف context",
-  },
-  {
-    name: "usage",
-    label: "مصرف Codex",
-    description: "نمایش سهمیه، محدودیت فعال و زمان بازنشانی",
-    providers: ["codex"],
   },
   {
     name: "model",
@@ -553,6 +554,18 @@ function effectiveProvider() {
   return urlThreadId ? providerForThread(urlThreadId) : state.settings.provider;
 }
 
+function providerSupports(capability, provider = effectiveProvider()) {
+  return PROVIDER_CAPABILITIES[provider]?.has(capability) ?? false;
+}
+
+function providerSupportsPlanMode(provider = effectiveProvider()) {
+  return providerSupports("plan", provider);
+}
+
+function providerSupportsGoalMode(provider = effectiveProvider()) {
+  return providerSupports("goal", provider);
+}
+
 async function rpc(method, params = {}) {
   const response = await api("/api/rpc", {
     method: "POST",
@@ -589,7 +602,7 @@ function slashCommandByName(name) {
 }
 
 function slashCommandSupportsProvider(command, provider = effectiveProvider()) {
-  return !command.providers || command.providers.includes(provider);
+  return !command.capability || providerSupports(command.capability, provider);
 }
 
 function slashCommandsForProvider(provider = effectiveProvider()) {
@@ -640,7 +653,12 @@ function slashCommandAvailability(command) {
     if (!state.currentThreadId) {
       return { available: false, reason: "ابتدا یک گفتگو را شروع یا باز کنید." };
     }
-    if (!state.connected) return { available: false, reason: "Codex هنوز متصل نیست." };
+    if (!state.connected) {
+      return {
+        available: false,
+        reason: `${providerLabel(effectiveProvider())} هنوز متصل نیست.`,
+      };
+    }
     if (state.busy || state.compactPendingThreads.has(state.currentThreadId)) {
       return { available: false, reason: "پس از پایان کار فعلی دوباره امتحان کنید." };
     }
@@ -854,8 +872,7 @@ function renderContextUsage() {
   const threadId = state.currentThreadId;
   const usage = threadId ? state.threadTokenUsage.get(threadId) : null;
   const metrics = contextUsageMetrics(usage);
-  const isCodexThread = threadId && effectiveProvider() === "codex";
-  if (!isCodexThread || !metrics) {
+  if (!threadId || !metrics) {
     elements.contextUsage.classList.add("hidden");
     elements.contextUsage.removeAttribute("data-level");
     elements.contextUsage.removeAttribute("data-percent");
@@ -913,8 +930,10 @@ function showSlashStatus() {
     rows.push(
       ["Sandbox", readableSandbox(runtime.sandbox || state.settings.sandbox)],
       ["Approval", readableApproval(runtime.approvalPolicy || state.settings.approvalPolicy)],
-      ["Context", contextUsageText(usage)],
     );
+  }
+  if (providerSupports("context", provider)) {
+    rows.push(["Context", contextUsageText(usage)]);
   }
   const card = renderLocalCommandCard(`وضعیت ${label}`);
   const list = document.createElement("dl");
@@ -980,7 +999,9 @@ async function runCompactSlashCommand(command) {
     } else {
       clearSlashCommandText(command.token, targetDraftKey);
       toast(
-        "Codex فشرده‌سازی را شروع کرده است، اما پاسخ تأیید آن به رابط نرسید.",
+        `${providerLabel(
+          providerForThread(threadId),
+        )} فشرده‌سازی را شروع کرده است، اما پاسخ تأیید آن به رابط نرسید.`,
         "warning",
         { duration: 7000 },
       );
@@ -990,8 +1011,9 @@ async function runCompactSlashCommand(command) {
       error.details?.code === -32601 ||
       /method not found|does not provide|not supported/i.test(error.message || "");
     if (unsupported) {
+      const label = providerLabel(providerForThread(threadId));
       toast(
-        "این نسخهٔ Codex از فشرده‌سازی بومی پشتیبانی نمی‌کند؛ Codex CLI را به‌روز کنید.",
+        `این نسخهٔ ${label} از فشرده‌سازی بومی پشتیبانی نمی‌کند؛ ${label} CLI را به‌روز کنید.`,
         "error",
         { duration: 7000 },
       );
@@ -2041,16 +2063,20 @@ function closeComposerToolsMenu() {
 
 function updateComposerModeUi() {
   const provider = effectiveProvider();
-  const codex = provider === "codex";
-  const plan = codex && composerModeFor() === "plan";
-  const goal = codex ? goalFor() : null;
-  elements.planModeOption.disabled = !codex;
-  elements.goalModeOption.disabled = !codex;
+  const planSupported = providerSupportsPlanMode(provider);
+  const goalSupported = providerSupportsGoalMode(provider);
+  const plan = planSupported && composerModeFor() === "plan";
+  const goal = goalSupported ? goalFor() : null;
+  elements.planModeOption.disabled = !planSupported;
+  elements.goalModeOption.disabled = !goalSupported;
   elements.planModeOption.setAttribute("aria-checked", String(plan));
-  elements.composerToolsNote.classList.toggle("hidden", codex);
+  elements.composerToolsNote.classList.toggle(
+    "hidden",
+    planSupported && goalSupported,
+  );
   elements.composerTools.classList.toggle("active-mode", Boolean(plan || goal));
-  const toolLabel = !codex
-    ? "Plan و Goal فقط برای Codex در دسترس‌اند"
+  const toolLabel = !planSupported && !goalSupported
+    ? `Plan و Goal برای ${providerLabel(provider)} در دسترس نیستند`
     : plan
       ? "ابزارهای گفتگو؛ Plan mode روشن است"
       : goal
@@ -2068,8 +2094,9 @@ function toggleComposerToolsMenu() {
 }
 
 function togglePlanMode() {
-  if (effectiveProvider() !== "codex") {
-    toast("Plan mode فقط در گفتگوهای Codex در دسترس است.", "warning");
+  const provider = effectiveProvider();
+  if (!providerSupportsPlanMode(provider)) {
+    toast(`Plan mode برای ${providerLabel(provider)} در دسترس نیست.`, "warning");
     return false;
   }
   const key = draftKey();
@@ -2145,7 +2172,7 @@ function formatGoalUsage(goal) {
 }
 
 function renderGoalProgress() {
-  const goal = effectiveProvider() === "codex" ? goalFor() : null;
+  const goal = providerSupportsGoalMode() ? goalFor() : null;
   elements.goalProgress.classList.toggle("hidden", !goal);
   if (!goal) {
     elements.goalProgress.removeAttribute("data-status");
@@ -2182,7 +2209,7 @@ function renderGoalProgress() {
 }
 
 async function loadGoal(threadId) {
-  if (!threadId || providerForThread(threadId) !== "codex") return null;
+  if (!threadId || !providerSupportsGoalMode(providerForThread(threadId))) return null;
   if (state.goalLoadingThreads.has(threadId)) return null;
   state.goalLoadingThreads.add(threadId);
   try {
@@ -2200,8 +2227,9 @@ async function loadGoal(threadId) {
 
 function openGoalDialog() {
   closeComposerToolsMenu();
-  if (effectiveProvider() !== "codex") {
-    toast("Goal mode فقط در گفتگوهای Codex در دسترس است.", "warning");
+  const provider = effectiveProvider();
+  if (!providerSupportsGoalMode(provider)) {
+    toast(`Goal mode برای ${providerLabel(provider)} در دسترس نیست.`, "warning");
     return;
   }
   const goal = goalFor();
@@ -2330,6 +2358,10 @@ function migrateComposerState(sourceKey, targetKey) {
 async function activatePendingGoal(threadId) {
   const pending = state.pendingGoals.get(threadId);
   if (!pending) return null;
+  if (!providerSupportsGoalMode(providerForThread(threadId))) {
+    state.pendingGoals.delete(threadId);
+    return null;
+  }
   const result = await rpc("thread/goal/set", {
     threadId,
     objective: pending.objective,
@@ -2649,6 +2681,9 @@ function setCurrentThread(thread, metadata = {}) {
   if (metadata.model || thread.model) runtime.model = metadata.model || thread.model;
   if (thread.permissionMode) runtime.permissionMode = thread.permissionMode;
   state.threadRuntime.set(thread.id, runtime);
+  if (metadata.tokenUsage !== undefined) {
+    state.threadTokenUsage.set(thread.id, metadata.tokenUsage || null);
+  }
   syncThreadActivity(thread);
   markThreadSeen(thread.id);
   elements.threadTitle.textContent = threadDisplayTitle(thread);
@@ -3522,12 +3557,17 @@ async function sendPrompt(
       threadId,
       provider,
     };
-    if (provider === "codex" && composerModeFor(threadId) === "plan") {
+    const planMode =
+      providerSupportsPlanMode(provider) && composerModeFor(threadId) === "plan";
+    if (planMode && provider === "codex") {
       const collaborationMode = planCollaborationMode();
       if (!collaborationMode) {
         throw new Error("برای Plan mode ابتدا یک مدل Codex انتخاب یا بارگذاری کنید.");
       }
       params.collaborationMode = collaborationMode;
+    }
+    if (planMode && provider === "claude") {
+      params.permissionMode = "plan";
     }
     if (provider === "codex" && !params.collaborationMode) {
       params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
