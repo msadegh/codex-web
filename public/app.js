@@ -56,7 +56,12 @@ const SLASH_COMMANDS = [
   {
     name: "model",
     label: "انتخاب مدل",
-    description: "بازکردن تنظیمات مدل گفتگوهای تازه",
+    description: "انتخاب مدل برای همین گفتگو یا پیش‌فرض گفتگوهای تازه",
+  },
+  {
+    name: "fast",
+    label: "Fast mode",
+    description: "نمایش یا تغییر سرعت با /fast on، /fast off و /fast status",
   },
   {
     name: "permissions",
@@ -243,13 +248,18 @@ const elements = {
   sandboxSelect: $("#sandbox-select"),
   saveSettings: $("#save-settings"),
   sessionInput: $("#session-input"),
+  serviceTierSelect: $("#service-tier-select"),
   scrollBottom: $("#scroll-bottom"),
   sendMessage: $("#send-message"),
   selectionAsk: $("#selection-ask"),
   settingsCancel: $("#settings-cancel"),
   settingsClose: $("#settings-close"),
   settingsDialog: $("#settings-dialog"),
+  settingsDescription: $("#settings-description"),
   settingsForm: $("#settings-form"),
+  settingsScope: $("#settings-scope"),
+  settingsScopeHelp: $("#settings-scope-help"),
+  settingsTitle: $("#settings-title"),
   sidebar: $("#sidebar"),
   sidebarClose: $("#sidebar-close"),
   slashCommandEmpty: $("#slash-command-empty"),
@@ -279,10 +289,12 @@ const defaultSettings = {
   personality: "",
   provider: "codex",
   sandbox: "",
+  serviceTier: "",
   sidebarCollapsed: false,
 };
 
-const SETTINGS_VERSION = 5;
+const SETTINGS_VERSION = 6;
+const THREAD_SETTINGS_KEY = "codex-web-thread-settings";
 
 const state = {
   activeInteractionKey: null,
@@ -338,6 +350,7 @@ const state = {
   threadActivity: new Map(),
   threadEventBacklog: new Map(),
   threadRuntime: new Map(),
+  threadSettings: loadThreadSettings(),
   threadTokenUsage: new Map(),
   threads: [],
   threadsRefreshVersion: 0,
@@ -379,6 +392,36 @@ function persistSettings() {
     "codex-web-settings",
     JSON.stringify({ ...settings, version: SETTINGS_VERSION }),
   );
+}
+
+function loadThreadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(THREAD_SETTINGS_KEY) || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return new Map();
+    return new Map(
+      Object.entries(saved).filter(
+        ([threadId, value]) =>
+          threadId && value && typeof value === "object" && !Array.isArray(value),
+      ),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function persistThreadSettings() {
+  localStorage.setItem(
+    THREAD_SETTINGS_KEY,
+    JSON.stringify(Object.fromEntries(state.threadSettings)),
+  );
+}
+
+function threadSetting(threadId = state.currentThreadId) {
+  return threadId ? state.threadSettings.get(threadId) || null : null;
+}
+
+function hasSetting(settings, key) {
+  return Boolean(settings && Object.hasOwn(settings, key));
 }
 
 async function api(path, options = {}) {
@@ -608,7 +651,7 @@ function parseSlashCommand(text) {
 
 function slashCommandAvailability(command) {
   if (state.navigating) return { available: false, reason: "تا پایان بازشدن گفتگو صبر کنید." };
-  if (["goal", "plan"].includes(command.name) && effectiveProvider() !== "codex") {
+  if (["fast", "goal", "plan"].includes(command.name) && effectiveProvider() !== "codex") {
     return { available: false, reason: "این حالت فقط برای گفتگوهای Codex در دسترس است." };
   }
   if (state.slashCommandExecuting && command.name === "compact") {
@@ -754,11 +797,20 @@ async function activateHighlightedSlashCommand() {
 
 function clearSlashCommandText(expectedToken, targetDraftKey = draftKey()) {
   const stored = state.drafts.get(targetDraftKey);
-  if (typeof stored === "string" && stored.trim().toLowerCase() === expectedToken.toLowerCase()) {
+  const normalizedExpected = expectedToken.trim().replace(/\s+/g, " ").toLowerCase();
+  const normalizedStored =
+    typeof stored === "string"
+      ? stored.trim().replace(/\s+/g, " ").toLowerCase()
+      : "";
+  if (normalizedStored === normalizedExpected) {
     state.drafts.set(targetDraftKey, "");
   }
   if (draftKey() !== targetDraftKey) return;
-  if (elements.prompt.value.trim().toLowerCase() !== expectedToken.toLowerCase()) return;
+  const normalizedPrompt = elements.prompt.value
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  if (normalizedPrompt !== normalizedExpected) return;
   elements.prompt.value = "";
   state.drafts.set(targetDraftKey, "");
   resizePrompt();
@@ -894,7 +946,13 @@ function showSlashStatus() {
         (!threadId ? state.settings.claudePermissionMode : "نامشخص"),
     ]);
   } else {
+    const configuredTier = threadId
+      ? hasSetting(threadSetting(threadId), "serviceTier")
+        ? threadSetting(threadId).serviceTier
+        : runtime.serviceTier
+      : state.settings.serviceTier;
     rows.push(
+      ["Speed", configuredTier === "fast" ? "Fast" : "Standard"],
       ["Sandbox", readableSandbox(runtime.sandbox || state.settings.sandbox)],
       ["Approval", readableApproval(runtime.approvalPolicy || state.settings.approvalPolicy)],
       ["Context", contextUsageText(usage)],
@@ -910,6 +968,44 @@ function showSlashStatus() {
     list.append(term, detail);
   }
   card.append(list);
+}
+
+function fastModeValue(threadId = state.currentThreadId) {
+  const configured = threadSetting(threadId);
+  if (threadId && hasSetting(configured, "serviceTier")) return configured.serviceTier;
+  if (threadId) return state.threadRuntime.get(threadId)?.serviceTier || "";
+  return state.settings.serviceTier || "";
+}
+
+function showFastStatus() {
+  const current = fastModeValue();
+  const scope = state.currentThreadId ? "همین گفتگو" : "پیش‌فرض گفتگوهای جدید";
+  const card = renderLocalCommandCard("وضعیت Fast mode");
+  const text = document.createElement("p");
+  text.textContent = `${scope}: ${current === "fast" ? "Fast" : "Standard"}`;
+  card.append(text);
+}
+
+function setFastMode(enabled) {
+  const serviceTier = enabled ? "fast" : "";
+  if (state.currentThreadId) {
+    const settings = { ...(threadSetting() || {}), serviceTier };
+    state.threadSettings.set(state.currentThreadId, settings);
+    persistThreadSettings();
+    const runtime = { ...(state.threadRuntime.get(state.currentThreadId) || {}) };
+    runtime.serviceTier = serviceTier;
+    state.threadRuntime.set(state.currentThreadId, runtime);
+  } else {
+    state.settings.serviceTier = serviceTier;
+    persistSettings();
+  }
+  updateSettingsUi();
+  toast(
+    `Fast mode برای ${state.currentThreadId ? "همین گفتگو" : "گفتگوهای جدید"} ${
+      enabled ? "روشن" : "خاموش"
+    } شد.`,
+    "success",
+  );
 }
 
 function showSlashHelp() {
@@ -987,7 +1083,7 @@ async function runCompactSlashCommand(command) {
   }
 }
 
-async function executeSlashCommand(command) {
+async function executeSlashCommand(command, argumentsText = "") {
   const availability = slashCommandAvailability(command);
   if (!availability.available) {
     toast(availability.reason, "warning");
@@ -996,6 +1092,7 @@ async function executeSlashCommand(command) {
   }
 
   const targetDraftKey = draftKey();
+  const commandText = [command.token, argumentsText].filter(Boolean).join(" ");
   switch (command.name) {
     case "goal":
       clearSlashCommandText(command.token, targetDraftKey);
@@ -1026,9 +1123,24 @@ async function executeSlashCommand(command) {
       showSlashStatus();
       return;
     case "model":
-      clearSlashCommandText(command.token, targetDraftKey);
+      clearSlashCommandText(commandText, targetDraftKey);
       openSettings({ focus: elements.modelSelect, provider: effectiveProvider() });
       return;
+    case "fast": {
+      const action = argumentsText.toLowerCase();
+      if (!action || action === "status") {
+        clearSlashCommandText(commandText, targetDraftKey);
+        showFastStatus();
+        return;
+      }
+      if (action !== "on" && action !== "off") {
+        toast("استفاده: /fast on، /fast off یا /fast status", "warning");
+        return;
+      }
+      clearSlashCommandText(commandText, targetDraftKey);
+      setFastMode(action === "on");
+      return;
+    }
     case "permissions":
       clearSlashCommandText(command.token, targetDraftKey);
       openSettings({
@@ -1037,6 +1149,7 @@ async function executeSlashCommand(command) {
             ? elements.claudePermissionMode
             : elements.sandboxSelect,
         provider: effectiveProvider(),
+        scope: "defaults",
       });
       return;
     case "settings":
@@ -1066,11 +1179,11 @@ async function handleSlashCommand(text) {
     toast("فرمان اسلش باید به‌تنهایی در یک خط نوشته شود.", "warning");
     return true;
   }
-  if (parsed.arguments) {
+  if (parsed.arguments && parsed.command.name !== "fast") {
     toast(`${parsed.command.token} در این رابط آرگومان نمی‌پذیرد.`, "warning");
     return true;
   }
-  await executeSlashCommand(parsed.command);
+  await executeSlashCommand(parsed.command, parsed.arguments);
   return true;
 }
 
@@ -1560,7 +1673,9 @@ function updateSettingsProviderUi(provider) {
     } else if (
       provider === "codex" &&
       !elements.effortSelect.value &&
-      state.settings.effort === "ultra"
+      (settingsScope() === "thread"
+        ? selectedThreadSettings().effort
+        : state.settings.effort) === "ultra"
     ) {
       elements.effortSelect.value = "ultra";
     }
@@ -1568,9 +1683,41 @@ function updateSettingsProviderUi(provider) {
   updateFullAccessWarning(provider);
 }
 
-function updateModelLabel(provider = state.settings.provider) {
+function settingsScope() {
+  return elements.settingsDialog.dataset.scope === "thread" && state.currentThreadId
+    ? "thread"
+    : "defaults";
+}
+
+function selectedThreadSettings(threadId = state.currentThreadId) {
+  const configured = threadSetting(threadId);
+  const runtime = threadId ? state.threadRuntime.get(threadId) || {} : {};
+  const thread = threadId === state.currentThreadId ? state.currentThread : null;
+  return {
+    effort: hasSetting(configured, "effort")
+      ? configured.effort
+      : runtime.reasoningEffort || thread?.effort || "",
+    model: hasSetting(configured, "model")
+      ? configured.model
+      : runtime.model || thread?.model || "",
+    serviceTier: hasSetting(configured, "serviceTier")
+      ? configured.serviceTier
+      : runtime.serviceTier || thread?.serviceTier || "",
+  };
+}
+
+function selectedSettingsModel(provider) {
+  if (settingsScope() === "thread" && provider === effectiveProvider()) {
+    return selectedThreadSettings().model;
+  }
+  return state.settings.modelByProvider[provider] || "";
+}
+
+function updateModelLabel(provider = effectiveProvider()) {
   const models = state.modelsByProvider[provider] || [];
-  const selectedModel = state.settings.modelByProvider[provider] || "";
+  const selectedModel = state.currentThreadId
+    ? selectedThreadSettings().model
+    : state.settings.modelByProvider[provider] || "";
   const model = models.find(
     (candidate) =>
       candidate.id === selectedModel || candidate.model === selectedModel,
@@ -1579,15 +1726,33 @@ function updateModelLabel(provider = state.settings.provider) {
 }
 
 function updateSettingsUi() {
-  const provider = state.settings.provider;
+  const scope = settingsScope();
+  const provider = scope === "thread" ? effectiveProvider() : state.settings.provider;
+  const threadValues = scope === "thread" ? selectedThreadSettings() : null;
+  elements.settingsDialog.dataset.scope = scope;
+  elements.settingsScope.value = scope;
+  const threadOption = elements.settingsScope.querySelector('option[value="thread"]');
+  if (threadOption) threadOption.disabled = !state.currentThreadId;
+  elements.settingsTitle.textContent =
+    scope === "thread" ? "تنظیمات همین گفتگو" : "پیش‌فرض کلی گفتگوها";
+  elements.settingsDescription.textContent =
+    scope === "thread"
+      ? "مدل، Effort و سرعت فقط برای نوبت‌های بعدی همین گفتگو تغییر می‌کنند."
+      : "این مقادیر فقط نقطهٔ شروع گفتگوهای تازه‌اند و گفتگوهای موجود را تغییر نمی‌دهند.";
+  elements.settingsScopeHelp.textContent =
+    scope === "thread"
+      ? "ذخیره در این بخش، پیش‌فرض کلی را دست‌نخورده نگه می‌دارد."
+      : "تغییر این بخش روی گفتگوهای موجود اثر نمی‌گذارد.";
   state.models = state.modelsByProvider[provider] || [];
-  const selectedModel = state.settings.modelByProvider[provider] || "";
+  const selectedModel = threadValues?.model ?? state.settings.modelByProvider[provider] ?? "";
   elements.cwdInput.value = state.settings.cwd;
   elements.cwdLabel.textContent = shortPath(state.settings.cwd, 38);
   elements.cwdLabel.title = state.settings.cwd;
   elements.providerSelect.value = provider;
   renderModelOptions(state.models, selectedModel, provider);
-  elements.effortSelect.value = state.settings.effort;
+  elements.effortSelect.value = threadValues?.effort ?? state.settings.effort;
+  elements.serviceTierSelect.value =
+    threadValues?.serviceTier ?? state.settings.serviceTier;
   elements.sandboxSelect.value = state.settings.sandbox;
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
@@ -1604,9 +1769,16 @@ function shortPath(path, length = 30) {
   return `…/${parts.slice(-2).join("/")}`;
 }
 
-function openSettings({ focus = elements.cwdInput, provider = state.settings.provider } = {}) {
+function openSettings({
+  focus = null,
+  provider = effectiveProvider(),
+  scope = state.currentThreadId ? "thread" : "defaults",
+} = {}) {
+  elements.settingsDialog.dataset.scope = scope === "thread" && state.currentThreadId
+    ? "thread"
+    : "defaults";
   updateSettingsUi();
-  if (provider !== state.settings.provider) {
+  if (provider !== elements.providerSelect.value) {
     elements.providerSelect.value = provider;
     updateSettingsProviderUi(provider);
     const models = state.modelsByProvider[provider] || [];
@@ -1614,10 +1786,40 @@ function openSettings({ focus = elements.cwdInput, provider = state.settings.pro
     void loadModels(provider);
   }
   elements.settingsDialog.showModal();
-  setTimeout(() => focus.focus(), 0);
+  const focusTarget =
+    focus || (settingsScope() === "thread" ? elements.modelSelect : elements.cwdInput);
+  setTimeout(() => focusTarget.focus(), 0);
 }
 
 function saveSettings() {
+  const scope = settingsScope();
+  if (scope === "thread") {
+    if (!state.currentThreadId) {
+      toast("برای تنظیم همین گفتگو ابتدا یک گفتگو را باز کنید.", "warning");
+      return;
+    }
+    const provider = effectiveProvider();
+    const configured = {
+      effort: elements.effortSelect.value,
+      model: elements.modelSelect.value,
+      ...(provider === "codex"
+        ? { serviceTier: elements.serviceTierSelect.value }
+        : {}),
+    };
+    state.threadSettings.set(state.currentThreadId, configured);
+    persistThreadSettings();
+    const runtime = { ...(state.threadRuntime.get(state.currentThreadId) || {}) };
+    runtime.model = configured.model;
+    runtime.reasoningEffort = configured.effort;
+    if (provider === "codex") runtime.serviceTier = configured.serviceTier;
+    state.threadRuntime.set(state.currentThreadId, runtime);
+    updateSettingsUi();
+    updateModelLabel(provider);
+    elements.settingsDialog.close();
+    toast("تنظیمات همین گفتگو ذخیره شد؛ پیش‌فرض کلی تغییر نکرد.", "success");
+    return;
+  }
+
   const cwd = elements.cwdInput.value.trim();
   if (!cwd.startsWith("/")) {
     toast("پوشه کاری باید با / شروع شود.", "error");
@@ -1636,6 +1838,7 @@ function saveSettings() {
     personality: elements.personalitySelect.value,
     provider,
     sandbox: elements.sandboxSelect.value,
+    serviceTier: elements.serviceTierSelect.value,
     sidebarCollapsed: state.settings.sidebarCollapsed,
   };
   persistSettings();
@@ -2625,6 +2828,7 @@ function setCurrentThread(thread, metadata = {}) {
   const runtime = { ...(state.threadRuntime.get(thread.id) || {}) };
   if (metadata.approvalPolicy !== undefined) runtime.approvalPolicy = metadata.approvalPolicy;
   if (metadata.reasoningEffort !== undefined) runtime.reasoningEffort = metadata.reasoningEffort;
+  if (metadata.serviceTier !== undefined) runtime.serviceTier = metadata.serviceTier;
   if (metadata.permissionMode !== undefined) runtime.permissionMode = metadata.permissionMode;
   if (metadata.sandbox !== undefined) runtime.sandbox = metadata.sandbox;
   if (metadata.cwd || thread.cwd) runtime.cwd = metadata.cwd || thread.cwd;
@@ -3414,8 +3618,14 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
   }
   const model = state.settings.modelByProvider[state.settings.provider] || "";
   if (model) params.model = model;
+  if (state.settings.provider === "codex" && state.settings.serviceTier) {
+    params.serviceTier = state.settings.serviceTier;
+  }
   if (state.settings.provider === "claude" && state.settings.claudePermissionMode) {
     params.permissionMode = state.settings.claudePermissionMode;
+    if (state.settings.effort && CLAUDE_EFFORTS.has(state.settings.effort)) {
+      params.effort = state.settings.effort;
+    }
   }
   const result = await rpc("thread/start", params);
   state.threadsRefreshVersion += 1;
@@ -3514,12 +3724,23 @@ async function sendPrompt(
     if (provider === "codex" && !params.collaborationMode) {
       params.developerInstructions = RESPONSE_STYLE_INSTRUCTIONS;
     }
-    if (
-      state.settings.effort &&
-      !params.collaborationMode &&
-      (provider === "codex" || CLAUDE_EFFORTS.has(state.settings.effort))
-    ) {
-      params.effort = state.settings.effort;
+    const configured = sourceThreadId ? threadSetting(threadId) : null;
+    if (!params.collaborationMode) {
+      if (sourceThreadId && hasSetting(configured, "model")) {
+        params.model = configured.model || null;
+      }
+      if (sourceThreadId && hasSetting(configured, "effort")) {
+        params.effort = configured.effort || null;
+      } else if (
+        !sourceThreadId &&
+        state.settings.effort &&
+        (provider === "codex" || CLAUDE_EFFORTS.has(state.settings.effort))
+      ) {
+        params.effort = state.settings.effort;
+      }
+      if (provider === "codex" && sourceThreadId && hasSetting(configured, "serviceTier")) {
+        params.serviceTier = configured.serviceTier || null;
+      }
     }
     const result = await rpc("turn/start", params);
     turnAccepted = true;
@@ -4516,11 +4737,16 @@ function renderModelOptions(
     option.textContent = `${model.displayName}${model.isDefault ? " — پیش‌فرض" : ""}`;
     elements.modelSelect.append(option);
   }
-  elements.modelSelect.value = models.some(
+  const selectedIsKnown = models.some(
     (model) => (model.model || model.id) === selectedModel,
-  )
-    ? selectedModel
-    : "";
+  );
+  if (selectedModel && !selectedIsKnown) {
+    const current = document.createElement("option");
+    current.value = selectedModel;
+    current.textContent = `${selectedModel} — انتخاب فعلی`;
+    elements.modelSelect.append(current);
+  }
+  elements.modelSelect.value = selectedIsKnown || selectedModel ? selectedModel : "";
 }
 
 async function loadModels(provider = state.settings.provider) {
@@ -4541,10 +4767,10 @@ async function loadModels(provider = state.settings.provider) {
       state.models = models;
       renderModelOptions(
         models,
-        state.settings.modelByProvider[provider] || "",
+        selectedSettingsModel(provider),
         provider,
       );
-      if (provider === state.settings.provider) updateModelLabel(provider);
+      if (provider === effectiveProvider()) updateModelLabel(provider);
     }
   } catch (error) {
     console.warn(`Could not load ${provider} models`, error);
@@ -4771,13 +4997,20 @@ elements.settingsForm.addEventListener("submit", (event) => event.preventDefault
 elements.settingsCancel.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsClose.addEventListener("click", () => elements.settingsDialog.close());
 elements.settingsDialog.addEventListener("close", updateSettingsUi);
+elements.settingsScope.addEventListener("change", () => {
+  elements.settingsDialog.dataset.scope =
+    elements.settingsScope.value === "thread" && state.currentThreadId
+      ? "thread"
+      : "defaults";
+  updateSettingsUi();
+});
 elements.providerSelect.addEventListener("change", () => {
   const provider = elements.providerSelect.value;
   updateSettingsProviderUi(provider);
   const cachedModels = state.modelsByProvider[provider] || [];
   renderModelOptions(
     cachedModels,
-    state.settings.modelByProvider[provider] || "",
+    selectedSettingsModel(provider),
     provider,
   );
   void loadModels(provider);

@@ -93,6 +93,7 @@ test("same-thread starts reserve before await and forward validated CLI settings
   const { thread } = await provider.rpc("thread/start", {
     cwd: root,
     effort: "high",
+    model: "sonnet",
     permissionMode: "acceptEdits",
   });
 
@@ -123,7 +124,22 @@ test("same-thread starts reserve before await and forward validated CLI settings
     start.args.slice(start.args.indexOf("--effort"), start.args.indexOf("--effort") + 2),
     ["--effort", "high"],
   );
+  assert.deepEqual(
+    start.args.slice(start.args.indexOf("--model"), start.args.indexOf("--model") + 2),
+    ["--model", "sonnet"],
+  );
   assert.equal(start.configDir, join(root, "claude-config"));
+
+  await provider.rpc("turn/start", {
+    threadId: thread.id,
+    effort: null,
+    model: null,
+    input: [{ type: "text", text: "provider defaults" }],
+  });
+  await waitForTurn(provider, thread.id, "completed");
+  const resetStart = (await readLog(logFile)).filter((entry) => entry.event === "start").at(-1);
+  assert.equal(resetStart.args.includes("--model"), false);
+  assert.equal(resetStart.args.includes("--effort"), false);
 
   await assert.rejects(
     provider.rpc("turn/start", {

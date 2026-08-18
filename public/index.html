@@ -423,13 +423,22 @@
       <form method="dialog" id="settings-form">
         <div class="dialog-header">
           <div>
-            <h2>تنظیمات گفتگو</h2>
-            <p>این گزینه‌ها برای گفتگوهای تازه اعمال می‌شوند.</p>
+            <h2 id="settings-title">تنظیمات گفتگو</h2>
+            <p id="settings-description">پیش‌فرض‌هایی که گفتگوهای تازه با آن‌ها شروع می‌شوند.</p>
           </div>
           <button class="icon-button" id="settings-close" type="button" aria-label="بستن">×</button>
         </div>
 
-        <label class="field">
+        <label class="field" id="settings-scope-field">
+          <span>محدودهٔ تنظیمات</span>
+          <select id="settings-scope">
+            <option value="defaults">پیش‌فرض کلی گفتگوهای جدید</option>
+            <option value="thread">فقط همین گفتگو</option>
+          </select>
+          <small id="settings-scope-help">تغییر این بخش روی گفتگوهای موجود اثر نمی‌گذارد.</small>
+        </label>
+
+        <label class="field default-scope-only">
           <span>Agent / ارائه‌دهنده</span>
           <select id="provider-select">
             <option value="codex">Codex CLI</option>
@@ -438,7 +447,7 @@
           <small>برای گفتگوی تازه استفاده می‌شود.</small>
         </label>
 
-        <label class="field">
+        <label class="field default-scope-only">
           <span>پوشه کاری</span>
           <input id="cwd-input" dir="ltr" spellcheck="false" autocomplete="off" />
           <small>مسیر باید absolute و موجود باشد.</small>
@@ -465,7 +474,16 @@
           </label>
         </div>
 
-        <div class="field-grid codex-only-setting">
+        <label class="field codex-only-setting">
+          <span>سرعت پردازش</span>
+          <select id="service-tier-select">
+            <option value="">Standard / پیش‌فرض</option>
+            <option value="fast">Fast</option>
+          </select>
+          <small>Fast پاسخ را سریع‌تر می‌کند و اعتبار بیشتری مصرف می‌کند.</small>
+        </label>
+
+        <div class="field-grid codex-only-setting default-scope-only">
           <label class="field">
             <span>دسترسی فایل‌ها</span>
             <select id="sandbox-select">
@@ -486,7 +504,7 @@
           </label>
         </div>
 
-        <label class="field codex-only-setting">
+        <label class="field codex-only-setting default-scope-only">
           <span>لحن پاسخ</span>
           <select id="personality-select">
             <option value="">پیش‌فرض</option>
@@ -496,7 +514,7 @@
           </select>
         </label>
 
-        <label class="field claude-only-setting" id="claude-permission-field">
+        <label class="field claude-only-setting default-scope-only" id="claude-permission-field">
           <span>مجوزهای Claude</span>
           <select id="claude-permission-mode">
             <option value="acceptEdits">ویرایش فایل‌ها مجاز؛ ابزارهای تأییدنشده رد می‌شوند</option>

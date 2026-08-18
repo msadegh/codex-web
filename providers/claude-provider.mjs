@@ -1246,7 +1246,7 @@ export class ClaudeProvider {
     ];
     if (resumeSession) args.push("--resume", thread.id);
     else args.push("--session-id", thread.id);
-    const model = params.model || thread.model;
+    const model = params.model === undefined ? thread.model : params.model;
     if (model) args.push("--model", model);
     const permissionMode = validatePermissionMode(
       params.permissionMode === undefined ? thread.permissionMode : params.permissionMode,

@@ -1016,6 +1016,172 @@ test(
 );
 
 test(
+  "thread model, effort, and fast overrides stay separate from new-chat defaults",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const thread = {
+      id: "scoped-settings-thread",
+      name: "Scoped settings",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const requests = [];
+    let nextTurn = 0;
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      if (request.method === "model/list") {
+        return jsonResponse({
+          result: {
+            data: [
+              { displayName: "Default model", id: "default-model", model: "default-model" },
+              { displayName: "Thread model", id: "thread-model", model: "thread-model" },
+              { displayName: "Override model", id: "override-model", model: "override-model" },
+            ],
+          },
+        });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({
+          result: {
+            thread,
+            cwd: thread.cwd,
+            model: "thread-model",
+            reasoningEffort: "high",
+            serviceTier: null,
+          },
+        });
+      }
+      if (request.method === "thread/start") {
+        return jsonResponse({
+          result: {
+            thread: {
+              ...thread,
+              id: "new-default-thread",
+              model: request.params.model || "",
+              name: "New defaults",
+            },
+            model: request.params.model || "",
+            serviceTier: request.params.serviceTier || null,
+          },
+        });
+      }
+      if (request.method === "turn/start") {
+        nextTurn += 1;
+        return jsonResponse({
+          result: {
+            turn: {
+              id: `scoped-turn-${nextTurn}`,
+              status: "inProgress",
+              items: [],
+              error: null,
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { values, window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=scoped-settings-thread",
+      savedSettings: {
+        cwd: "/workspace",
+        effort: "medium",
+        modelByProvider: { claude: "", codex: "default-model" },
+        provider: "codex",
+        serviceTier: "",
+        version: 6,
+      },
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === "Scoped settings",
+      "scoped thread was not hydrated",
+    );
+    await waitFor(
+      () => document.querySelector("#model-select option[value='override-model']"),
+      "models were not loaded",
+    );
+
+    document.querySelector("#open-settings").click();
+    assert.equal(document.querySelector("#settings-scope").value, "thread");
+    assert.equal(document.querySelector("#model-select").value, "thread-model");
+    assert.equal(document.querySelector("#effort-select").value, "high");
+
+    document.querySelector("#model-select").value = "override-model";
+    document.querySelector("#effort-select").value = "low";
+    document.querySelector("#save-settings").click();
+    assert.equal(document.querySelector("#settings-dialog").open, false);
+
+    typePrompt(window, "/fast on");
+    document.querySelector("#send-message").click();
+    await waitFor(
+      () => document.querySelector("#prompt").value === "",
+      "/fast on did not complete",
+    );
+    const storedThreadSettings = JSON.parse(values.get("codex-web-thread-settings"));
+    assert.deepEqual(storedThreadSettings[thread.id], {
+      effort: "low",
+      model: "override-model",
+      serviceTier: "fast",
+    });
+    const storedDefaults = JSON.parse(values.get("codex-web-settings"));
+    assert.equal(storedDefaults.modelByProvider.codex, "default-model");
+    assert.equal(storedDefaults.effort, "medium");
+    assert.equal(storedDefaults.serviceTier, "");
+
+    typePrompt(window, "ادامهٔ همین گفتگو");
+    document.querySelector("#send-message").click();
+    await waitFor(
+      () => requests.some((request) => request.method === "turn/start"),
+      "thread turn was not started",
+    );
+    const existingTurn = requests.find((request) => request.method === "turn/start");
+    assert.equal(existingTurn.params.threadId, thread.id);
+    assert.equal(existingTurn.params.model, "override-model");
+    assert.equal(existingTurn.params.effort, "low");
+    assert.equal(existingTurn.params.serviceTier, "fast");
+
+    document.querySelector("#new-chat").click();
+    document.querySelector("#open-settings").click();
+    assert.equal(document.querySelector("#settings-scope").value, "defaults");
+    assert.equal(document.querySelector("#model-select").value, "default-model");
+    assert.equal(document.querySelector("#effort-select").value, "medium");
+    assert.equal(document.querySelector("#service-tier-select").value, "");
+    document.querySelector("#settings-cancel").click();
+
+    typePrompt(window, "گفتگوی جدید");
+    document.querySelector("#send-message").click();
+    await waitFor(
+      () => requests.some((request) => request.method === "thread/start"),
+      "new default thread was not started",
+    );
+    const newThread = requests.find((request) => request.method === "thread/start");
+    assert.equal(newThread.params.model, "default-model");
+    assert.equal(Object.hasOwn(newThread.params, "serviceTier"), false);
+    await waitFor(
+      () => requests.filter((request) => request.method === "turn/start").length === 2,
+      "new default turn was not started",
+    );
+    const newTurn = requests.filter((request) => request.method === "turn/start")[1];
+    assert.equal(newTurn.params.threadId, "new-default-thread");
+    assert.equal(newTurn.params.effort, "medium");
+    assert.equal(Object.hasOwn(newTurn.params, "model"), false);
+    assert.equal(Object.hasOwn(newTurn.params, "serviceTier"), false);
+  },
+);
+
+test(
   "Claude conversations keep unsupported compact commands out of RPC",
   { concurrency: false },
   async (t) => {

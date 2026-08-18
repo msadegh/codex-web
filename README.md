@@ -24,6 +24,8 @@ many terminals.
   local conversation history, and Claude permission modes.
 - Runs multiple isolated Codex and Claude conversations concurrently in one
   browser tab.
+- Keeps global new-conversation defaults separate from per-conversation model,
+  reasoning-effort, and speed overrides.
 - Routes Codex approval prompts and user-input questions to the correct
   conversation. Claude runs non-interactively and follows its configured
   permission mode and permission rules.
@@ -233,8 +235,9 @@ configurations should use Claude Code's official `CLAUDE_CONFIG_DIR` variable.
 
 | Setting | Codex | Claude |
 | --- | --- | --- |
-| Working directory and model | Applied to new conversations | Applied to new conversations |
-| Reasoning effort | Available values depend on the Codex model | `low`, `medium`, `high`, `xhigh`, or `max`; `ultra` is not sent |
+| Working directory | Applied to new conversations | Applied to new conversations |
+| Model and reasoning effort | Global new-conversation defaults or an override for only the open conversation | Global defaults or an open-conversation override; effort supports `low`, `medium`, `high`, `xhigh`, or `max`, while `ultra` is not sent |
+| Speed | Standard or Fast for Codex defaults and individual conversations | Not sent to Claude |
 | Sandbox, approval policy, and personality | Applied | Hidden and not sent to Claude |
 | Claude permission mode | Not used | Applied to new web-created conversations |
 
@@ -314,6 +317,7 @@ the list or select a command with the keyboard, mouse, or touch.
 | `/resume` | Open the saved-conversation list |
 | `/status` | Show the current conversation status |
 | `/model` | Open model settings |
+| `/fast on`, `/fast off`, `/fast status` | Change or inspect Fast mode for the open conversation, or the new-conversation default when no conversation is open |
 | `/permissions` | Open the permission settings for the selected provider |
 | `/settings` | Open all conversation settings |
 | `/help` | Show the supported command list |
