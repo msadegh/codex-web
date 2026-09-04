@@ -3,6 +3,11 @@
 import { appendFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
+if (process.argv.includes("--version")) {
+  console.log("codex-cli 0.0.0-test");
+  process.exit(0);
+}
+
 if (process.env.FAKE_CODEX_ARGS_FILE) {
   writeFileSync(
     process.env.FAKE_CODEX_ARGS_FILE,

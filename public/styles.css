@@ -111,6 +111,13 @@ textarea:focus-visible {
   font-size: 0.72rem;
 }
 
+.brand-version {
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .brand-mark,
 .welcome-mark {
   display: grid;

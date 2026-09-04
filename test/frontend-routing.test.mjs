@@ -834,7 +834,14 @@ test(
   { concurrency: false },
   async (t) => {
     const fetchHandler = async (path, options = {}) => {
-      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/status") {
+        return jsonResponse({
+          ready: true,
+          cwd: "/workspace",
+          webVersion: "0.7.0-test",
+          codexVersion: "0.153.2-test",
+        });
+      }
       if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
       const { method } = JSON.parse(options.body);
       if (method === "model/list" || method === "collaborationMode/list") {
@@ -866,6 +873,8 @@ test(
     assert.equal(sidebar.hasAttribute("inert"), true);
     assert.equal(menu.getAttribute("aria-expanded"), "false");
     assert.equal(document.querySelectorAll(".sidebar-toggle-icon").length, 2);
+    assert.equal(document.querySelector("#version-label").textContent.trim(), "Web 0.7.0-test · CLI 0.153.2-test");
+    assert.doesNotMatch(document.querySelector(".brand-row").textContent, /روی همین دستگاه/);
 
     menu.click();
     assert.equal(document.body.classList.contains("sidebar-collapsed"), false);
@@ -1112,6 +1121,11 @@ test(
       () => document.querySelector("#model-select option[value='override-model']"),
       "models were not loaded",
     );
+    assert.equal(document.querySelector("#model-label").textContent, "Thread model · High");
+    assert.equal(
+      document.querySelector("#thread-meta").textContent,
+      "Codex  ·  /workspace  ·  thread-model · High",
+    );
 
     document.querySelector("#open-settings").click();
     assert.equal(document.querySelector("#settings-scope").value, "thread");
@@ -1122,6 +1136,11 @@ test(
     document.querySelector("#effort-select").value = "low";
     document.querySelector("#save-settings").click();
     assert.equal(document.querySelector("#settings-dialog").open, false);
+    assert.equal(document.querySelector("#model-label").textContent, "Override model · Low");
+    assert.equal(
+      document.querySelector("#thread-meta").textContent,
+      "Codex  ·  /workspace  ·  override-model · Low",
+    );
 
     typePrompt(window, "/fast on");
     document.querySelector("#send-message").click();
@@ -1153,6 +1172,8 @@ test(
     assert.equal(existingTurn.params.serviceTier, "fast");
 
     document.querySelector("#new-chat").click();
+    assert.equal(document.querySelector("#model-label").textContent, "Default model · Medium");
+    assert.equal(document.querySelector("#thread-meta").textContent, "");
     document.querySelector("#open-settings").click();
     assert.equal(document.querySelector("#settings-scope").value, "defaults");
     assert.equal(document.querySelector("#model-select").value, "default-model");

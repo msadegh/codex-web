@@ -7,6 +7,14 @@ const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const EFFORT_LABELS = {
+  high: "High",
+  low: "Low",
+  max: "Max",
+  medium: "Medium",
+  ultra: "Ultra",
+  xhigh: "Extra high",
+};
 const RESPONSE_STYLE_INSTRUCTIONS =
   "Make final responses adaptively structured and easy to scan. Lead with the direct answer or outcome. If a response contains multiple distinct parts, organize it with Markdown: use short descriptive ## headings for major sections, ### only for genuine subsections, bullets for three or more parallel items, options, or findings, and numbered lists only for ordered actions. Keep paragraphs to one to three sentences and use bold labels sparingly for scan points. Turn list-like prose into real lists. Keep simple answers as a short paragraph. Avoid # headings, deep nesting, decorative sections, redundant summaries, and tables unless a comparison is genuinely clearer.";
 const IMAGE_EXTENSIONS = {
@@ -62,6 +70,11 @@ const SLASH_COMMANDS = [
     name: "fast",
     label: "Fast mode",
     description: "نمایش یا تغییر سرعت با /fast on، /fast off و /fast status",
+  },
+  {
+    name: "parallel",
+    label: "اجرای موازی",
+    description: "اجرای یک کار در چند سشن مستقل و جمع‌بندی نتیجه‌ها؛ مثلا /parallel 10 دستور",
   },
   {
     name: "permissions",
@@ -148,6 +161,7 @@ const KNOWN_CODEX_COMMAND_NAMES = new Set([
   "pet",
   "pets",
   "plan",
+  "parallel",
   "plugins",
   "project",
   "ps",
@@ -238,6 +252,7 @@ const elements = {
   personalitySelect: $("#personality-select"),
   planModeOption: $("#plan-mode-option"),
   providerSelect: $("#provider-select"),
+  versionLabel: $("#version-label"),
   claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
   prompt: $("#prompt"),
@@ -328,6 +343,7 @@ const state = {
   pendingInteractions: new Map(),
   pendingGoals: new Map(),
   pendingTurnStarts: 0,
+  parallelRuns: new Map(),
   postponedInteractions: new Set(),
   promptQueues: new Map(),
   providerStatuses: {
@@ -673,6 +689,21 @@ function slashCommandAvailability(command) {
     }
     if (imageUploadsForDraft() > 0) {
       return { available: false, reason: "تا پایان افزودن تصویرها صبر کنید." };
+    }
+  }
+  if (command.name === "parallel") {
+    if (state.slashCommandExecuting) {
+      return { available: false, reason: "یک اجرای موازی دیگر در حال انجام است." };
+    }
+    if (effectiveProvider() !== "codex") {
+      return { available: false, reason: "اجرای موازی فعلاً فقط برای گفتگوهای Codex در دسترس است." };
+    }
+    if (!state.currentThreadId) {
+      return { available: false, reason: "ابتدا سشن اصلی را شروع یا باز کنید." };
+    }
+    if (!state.connected) return { available: false, reason: "Codex هنوز متصل نیست." };
+    if (state.busy || state.parallelRuns.size > 0) {
+      return { available: false, reason: "پس از پایان کار فعلی دوباره امتحان کنید." };
     }
   }
   if (
@@ -1083,6 +1114,151 @@ async function runCompactSlashCommand(command) {
   }
 }
 
+function parallelThreadParams() {
+  const configured = threadSetting(state.currentThreadId) || {};
+  const params = {
+    cwd: state.currentThread?.cwd || state.settings.cwd,
+    provider: "codex",
+  };
+  const model = configured.model || state.settings.modelByProvider.codex || "";
+  if (model) params.model = model;
+  const effort = configured.effort || state.settings.effort || "";
+  if (effort) params.effort = effort;
+  const serviceTier = configured.serviceTier || state.settings.serviceTier || "";
+  if (serviceTier) params.serviceTier = serviceTier;
+  if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
+  if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
+  if (state.settings.personality) params.personality = state.settings.personality;
+  return params;
+}
+
+function observeParallelNotification(message) {
+  const { method, params = {} } = message;
+  const threadId = params.threadId || params.conversationId;
+  if (!threadId) return;
+  const run = state.parallelRuns.get(threadId);
+  if (!run) return;
+  if (method === "item/agentMessage/delta") {
+    const itemId = params.itemId || params.item?.id || "agent";
+    run.messages.set(itemId, `${run.messages.get(itemId) || ""}${params.delta || ""}`);
+  } else if (method === "item/completed" && params.item?.type === "agentMessage") {
+    const itemId = params.item.id || "agent";
+    if (!run.messages.has(itemId) || !run.messages.get(itemId)) {
+      const text =
+        params.item.text ||
+        (Array.isArray(params.item.content)
+          ? params.item.content
+              .filter((part) => part?.type === "text" && typeof part.text === "string")
+              .map((part) => part.text)
+              .join("")
+          : "");
+      run.messages.set(itemId, text);
+    }
+  } else if (method === "turn/completed") {
+    const status = params.turn?.status || "completed";
+    const output = [...run.messages.values()].join("\n\n").trim();
+    run.resolve({ threadId, status, output });
+    state.parallelRuns.delete(threadId);
+  }
+}
+
+function waitForParallelTurn(threadId, turnId, timeoutMs = 15 * 60_000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      state.parallelRuns.delete(threadId);
+      resolve({ threadId, turnId, status: "timeout", output: "پاسخ این سشن در زمان مقرر دریافت نشد." });
+    }, timeoutMs);
+    state.parallelRuns.set(threadId, {
+      turnId,
+      messages: new Map(),
+      resolve(result) {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      cancel() {
+        clearTimeout(timer);
+        resolve({ threadId, turnId, status: "cancelled", output: "این اجرای موازی به‌دلیل خطای یکی از سشن‌ها لغو شد." });
+      },
+    });
+  });
+}
+
+async function runParallelSlashCommand(command, argumentsText) {
+  const targetDraftKey = draftKey();
+  const match = String(argumentsText || "").trim().match(/^(\d{1,2})\s+([\s\S]+)$/);
+  if (!match) {
+    toast("استفاده: /parallel تعداد دستور — مثلا /parallel 10 تست‌های پروژه را اجرا کن", "warning", { duration: 7000 });
+    return;
+  }
+  const count = Number(match[1]);
+  const instruction = match[2].trim();
+  if (!Number.isInteger(count) || count < 2 || count > 10 || !instruction) {
+    toast("تعداد سشن باید بین ۲ تا ۱۰ باشد و دستور هم خالی نباشد.", "warning");
+    return;
+  }
+  const parentThreadId = state.currentThreadId;
+  clearSlashCommandText(`${command.token} ${argumentsText}`, targetDraftKey);
+  state.slashCommandExecuting = true;
+  updateComposerControls();
+  toast(`در حال اجرای موازی ${count} سشن…`, "success", { duration: 6000 });
+
+  const results = [];
+  try {
+    const starts = await Promise.all(
+      Array.from({ length: count }, async (_, index) => {
+        const start = await rpc("thread/start", {
+          ...parallelThreadParams(),
+          developerInstructions: `${RESPONSE_STYLE_INSTRUCTIONS}\n\nاین سشن یکی از ${count} بررسی موازی است. مستقل کار کن و در پایان نتیجهٔ قابل‌استفاده، شواهد و ابهام‌ها را کوتاه گزارش بده. شمارهٔ سشن: ${index + 1}.`,
+        });
+        const threadId = start.thread.id;
+        const completion = waitForParallelTurn(threadId, null);
+        try {
+          const turn = await rpc("turn/start", {
+            threadId,
+            provider: "codex",
+            clientUserMessageId: crypto.randomUUID(),
+            input: [{ type: "text", text: instruction }],
+            developerInstructions: `${RESPONSE_STYLE_INSTRUCTIONS}\n\nنتیجه را مستقل و دقیق ارائه کن؛ پاسخ نهایی برای جمع‌بندی سشن اصلی استفاده می‌شود.`,
+          });
+          const run = state.parallelRuns.get(threadId);
+          if (run) run.turnId = turn.turn?.id || null;
+        } catch (error) {
+          state.parallelRuns.delete(threadId);
+          throw error;
+        }
+        const result = await completion;
+        return { index: index + 1, ...result };
+      }),
+    );
+    results.push(...starts);
+    const report = results
+      .map((result) => `### سشن ${result.index} (${result.status})\n${(result.output || "بدون خروجی").slice(0, 8000)}`)
+      .join("\n\n");
+    const summaryPrompt = `تو هماهنگ‌کنندهٔ سشن اصلی هستی. کار زیر در ${count} سشن مستقل انجام شد:\n\n${instruction}\n\nگزارش سشن‌ها:\n${report}\n\nگزارش‌ها را با هم مقایسه کن، تناقض‌ها را مشخص کن و یک نتیجهٔ نهایی عملی و کوتاه به فارسی ارائه بده.`;
+    await rpc("turn/start", {
+      threadId: parentThreadId,
+      provider: "codex",
+      clientUserMessageId: crypto.randomUUID(),
+      input: [{ type: "text", text: summaryPrompt }],
+      developerInstructions: RESPONSE_STYLE_INSTRUCTIONS,
+    });
+    toast("همهٔ سشن‌ها تمام شدند؛ جمع‌بندی در سشن اصلی در حال آماده‌شدن است.", "success");
+  } catch (error) {
+    for (const [threadId, run] of state.parallelRuns) {
+      if (run.turnId) {
+        void rpc("turn/interrupt", { threadId, turnId: run.turnId, provider: "codex" }).catch(() => {});
+      }
+      run.cancel?.();
+      state.parallelRuns.delete(threadId);
+    }
+    showError(error, "اجرای موازی");
+  } finally {
+    state.slashCommandExecuting = false;
+    updateSlashCommandMenu();
+    updateComposerControls();
+  }
+}
+
 async function executeSlashCommand(command, argumentsText = "") {
   const availability = slashCommandAvailability(command);
   if (!availability.available) {
@@ -1141,6 +1317,9 @@ async function executeSlashCommand(command, argumentsText = "") {
       setFastMode(action === "on");
       return;
     }
+    case "parallel":
+      await runParallelSlashCommand(command, argumentsText);
+      return;
     case "permissions":
       clearSlashCommandText(command.token, targetDraftKey);
       openSettings({
@@ -1179,7 +1358,7 @@ async function handleSlashCommand(text) {
     toast("فرمان اسلش باید به‌تنهایی در یک خط نوشته شود.", "warning");
     return true;
   }
-  if (parsed.arguments && parsed.command.name !== "fast") {
+  if (parsed.arguments && !["fast", "parallel"].includes(parsed.command.name)) {
     toast(`${parsed.command.token} در این رابط آرگومان نمی‌پذیرد.`, "warning");
     return true;
   }
@@ -1534,7 +1713,7 @@ function updateComposerControls() {
   const queueMode = state.busy && !slash;
   elements.sendMessage.disabled = slash
     ? !slashCanRun
-    : !state.connected || state.navigating || uploading || !text;
+    : !state.connected || state.navigating || state.slashCommandExecuting || uploading || !text;
   elements.sendMessage.classList.toggle("queue-mode", queueMode);
   elements.sendMessage.setAttribute(
     "aria-label",
@@ -1597,8 +1776,28 @@ function setProviderStatus(provider, status = {}) {
   return previous.ready !== next.ready || previous.message !== next.message;
 }
 
+function updateVersionLabel(data = {}) {
+  const webVersion = String(data.webVersion || "").trim();
+  const codexVersion = String(data.codexVersion || "").trim();
+  if (!webVersion && !codexVersion) return;
+  const compact = [
+    webVersion ? `Web ${webVersion}` : "",
+    codexVersion ? `CLI ${codexVersion}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  elements.versionLabel.textContent = compact;
+  elements.versionLabel.title = [
+    webVersion ? `Codex Web ${webVersion}` : "",
+    codexVersion ? `Codex CLI ${codexVersion}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function applyProviderStatusPayload(data = {}) {
   let changed = false;
+  updateVersionLabel(data);
   if (data.providers) {
     for (const provider of ["codex", "claude"]) {
       if (data.providers[provider]) {
@@ -1713,16 +1912,44 @@ function selectedSettingsModel(provider) {
   return state.settings.modelByProvider[provider] || "";
 }
 
+function modelAndEffortLabel(model, effort) {
+  const normalizedEffort = String(effort || "").trim();
+  return [model, EFFORT_LABELS[normalizedEffort] || normalizedEffort]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function updateModelLabel(provider = effectiveProvider()) {
   const models = state.modelsByProvider[provider] || [];
-  const selectedModel = state.currentThreadId
-    ? selectedThreadSettings().model
-    : state.settings.modelByProvider[provider] || "";
+  const threadSettings = state.currentThreadId ? selectedThreadSettings() : null;
+  const selectedModel = threadSettings?.model || state.settings.modelByProvider[provider] || "";
   const model = models.find(
     (candidate) =>
       candidate.id === selectedModel || candidate.model === selectedModel,
   );
-  elements.modelLabel.textContent = model?.displayName || selectedModel || "مدل پیش‌فرض";
+  const effort = threadSettings?.effort || state.settings.effort;
+  const label = modelAndEffortLabel(
+    model?.displayName || selectedModel || "مدل پیش‌فرض",
+    effort,
+  );
+  elements.modelLabel.textContent = label;
+  elements.modelLabel.title = label;
+}
+
+function updateCurrentThreadMeta() {
+  if (!state.currentThreadId || !state.currentThread) return;
+  const thread = state.currentThread;
+  const runtime = state.threadRuntime.get(thread.id) || {};
+  const configured = selectedThreadSettings(thread.id);
+  const meta = [
+    providerLabel(thread.provider || providerForThread(thread.id)),
+    runtime.cwd || thread.cwd || state.settings.cwd,
+    modelAndEffortLabel(configured.model, configured.effort),
+  ]
+    .filter(Boolean)
+    .join("  ·  ");
+  elements.threadMeta.textContent = meta;
+  elements.threadMeta.title = meta;
 }
 
 function updateSettingsUi() {
@@ -1815,6 +2042,7 @@ function saveSettings() {
     state.threadRuntime.set(state.currentThreadId, runtime);
     updateSettingsUi();
     updateModelLabel(provider);
+    updateCurrentThreadMeta();
     elements.settingsDialog.close();
     toast("تنظیمات همین گفتگو ذخیره شد؛ پیش‌فرض کلی تغییر نکرد.", "success");
     return;
@@ -2810,6 +3038,8 @@ function newChat({ draftId = null, historyMode = "push" } = {}) {
   elements.welcome.classList.remove("hidden");
   elements.threadTitle.textContent = "گفتگوی تازه";
   elements.threadMeta.textContent = "";
+  elements.threadMeta.title = "";
+  updateModelLabel(state.settings.provider);
   renderContextUsage();
   updateThreadUrl(null, historyMode, state.newDraftId);
   restoreDraft(null);
@@ -2838,15 +3068,8 @@ function setCurrentThread(thread, metadata = {}) {
   syncThreadActivity(thread);
   markThreadSeen(thread.id);
   elements.threadTitle.textContent = threadDisplayTitle(thread);
-  const cwd = metadata.cwd || thread.cwd || state.settings.cwd;
-  const model = metadata.model || thread.model || "";
-  elements.threadMeta.textContent = [
-    providerLabel(thread.provider || providerForThread(thread.id)),
-    cwd,
-    model,
-  ]
-    .filter(Boolean)
-    .join("  ·  ");
+  updateCurrentThreadMeta();
+  updateModelLabel(thread.provider || providerForThread(thread.id));
   elements.welcome.classList.add("hidden");
   renderContextUsage();
   restoreDraft(thread.id);
@@ -3660,6 +3883,7 @@ async function sendPrompt(
   text = elements.prompt.value,
   { fromQueue = false } = {},
 ) {
+  if (state.slashCommandExecuting && !parseSlashCommand(text)) return false;
   if (parseSlashCommand(text)) {
     return Boolean(await handleSlashCommand(text));
   }
@@ -3926,6 +4150,7 @@ function flushThreadEventBacklog(threadId) {
 function handleNotification(message) {
   const { method, params = {} } = message;
   const threadId = params.threadId || params.conversationId || null;
+  observeParallelNotification(message);
 
   if (method === "serverRequest/resolved") {
     if (params.requestId !== undefined) {

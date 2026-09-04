@@ -103,6 +103,7 @@ test("CLI exposes help and version without starting the server", async () => {
 });
 
 test("server starts with a fake Codex bridge and enforces local security boundaries", async (t) => {
+  const packageInfo = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
   const temporaryRoot = await mkdtemp(join(os.tmpdir(), "codex-web-test-"));
   const codexHome = join(temporaryRoot, "codex-home");
   const cacheHome = join(temporaryRoot, "cache");
@@ -150,6 +151,8 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   const status = await statusResponse.json();
   assert.equal(status.ready, true);
   assert.equal(status.cwd, temporaryRoot);
+  assert.equal(status.webVersion, packageInfo.version);
+  assert.equal(status.codexVersion, "0.0.0-test");
 
   const pageResponse = await fetch(`${baseUrl}/`);
   assert.equal(pageResponse.status, 200);

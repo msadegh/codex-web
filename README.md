@@ -93,7 +93,7 @@ See [SECURITY.md](SECURITY.md) before running Codex Web on a server.
 - A configured login, provider profile, or environment-based credentials for
   each provider you plan to use.
 
-The current release is tested with Codex CLI `0.145.0`; other recent versions
+The current release is tested with Codex CLI `0.153.2`; other recent versions
 may work, but the experimental app-server protocol can change. The Claude
 authentication commands and CLI flags documented here were verified against
 Claude Code `2.1.220`. The integration also depends on Claude Code's
@@ -318,6 +318,7 @@ the list or select a command with the keyboard, mouse, or touch.
 | `/status` | Show the current conversation status |
 | `/model` | Open model settings |
 | `/fast on`, `/fast off`, `/fast status` | Change or inspect Fast mode for the open conversation, or the new-conversation default when no conversation is open |
+| `/parallel 10 instruction` | Run an instruction in 2–10 independent Codex sessions and automatically summarize the results in the main session |
 | `/permissions` | Open the permission settings for the selected provider |
 | `/settings` | Open all conversation settings |
 | `/help` | Show the supported command list |
@@ -328,6 +329,13 @@ or Claude terminal interfaces. These commands are handled by Codex Web rather
 than passed through to the selected provider.
 
 ## Parallel conversations
+
+To fan out one task quickly, run a command such as
+`/parallel 10 run the project tests and find the failures` in the main Codex
+conversation. The child sessions start concurrently; once they finish, Codex
+compares their reports and writes a practical summary back into the main
+conversation. This command currently targets Codex only, and child sessions
+may still ask for the usual approval or input interactions.
 
 One Codex Web process can run multiple Codex and Claude conversations
 concurrently. Start a task, select **New chat**, and start another task.

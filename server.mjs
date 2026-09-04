@@ -3,7 +3,7 @@
 import { createServer } from "node:http";
 import { createReadStream, readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -58,6 +58,7 @@ const HOST = "127.0.0.1";
 const PORT = parsePort(process.env.CODEX_WEB_PORT ?? "4173");
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
+const CODEX_VERSION = readCodexVersion();
 const CLAUDE_CONFIG_DIR = resolve(
   process.env.CLAUDE_CONFIG_DIR ||
     process.env.CLAUDE_HOME ||
@@ -96,6 +97,18 @@ const UPLOAD_DIR = resolve(
 const CLAUDE_DATA_DIR = resolve(
   process.env.CLAUDE_WEB_DATA_DIR || join(CACHE_HOME, "codex-web", "claude"),
 );
+
+function readCodexVersion() {
+  const result = spawnSync(CODEX_BIN, ["--version"], {
+    encoding: "utf8",
+    env: process.env,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 3_000,
+    windowsHide: true,
+  });
+  if (result.status !== 0) return "";
+  return result.stdout.match(/\bcodex-cli\s+([0-9]+(?:\.[0-9]+){2}(?:[-+][0-9A-Za-z.-]+)?)/i)?.[1] || "";
+}
 
 const IMAGE_TYPES = new Map([
   ["image/png", ".png"],
@@ -1393,6 +1406,8 @@ const server = createServer(async (req, res) => {
       res.write(`retry: 1000\nevent: status\ndata: ${JSON.stringify({
         ready: bridge.ready,
         message: bridge.ready ? "connected" : "starting",
+        webVersion: PACKAGE.version,
+        codexVersion: CODEX_VERSION,
         providers: {
           codex: { ready: bridge.ready, binary: CODEX_BIN },
           claude: claudeStatus,
@@ -1412,6 +1427,8 @@ const server = createServer(async (req, res) => {
       const claudeStatus = await claudeProvider.status();
       return json(res, 200, {
         ready: bridge.ready,
+        webVersion: PACKAGE.version,
+        codexVersion: CODEX_VERSION,
         codexBin: CODEX_BIN,
         claudeBin: CLAUDE_BIN,
         providers: {
