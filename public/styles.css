@@ -316,7 +316,7 @@ body.sidebar-collapsed .menu-button {
   top: 18px;
   left: 50%;
   transform: translateX(-50%);
-  width: max-content;
+  width: 260px;
   max-width: calc(100% - 24px);
   box-sizing: border-box;
   white-space: nowrap;
@@ -332,10 +332,10 @@ body.sidebar-collapsed .menu-button {
   z-index: 2;
 }
 .conversation { position: relative; }
-.conversation.session-loading::after { content:""; position:absolute; top:17px; left:calc(50% - 74px); width:16px; height:16px; border:3px solid var(--accent); border-right-color:transparent; border-radius:50%; animation:button-spin .7s linear infinite; z-index:3; }
+.conversation.session-loading::after { content:""; position:absolute; top:32px; left:calc(50% - 108px); width:16px; height:16px; border:3px solid var(--accent); border-right-color:transparent; border-radius:50%; animation:button-spin .7s linear infinite; z-index:3; }
 @media (max-width: 420px) {
   .conversation.session-loading::before { padding-inline-start: 34px; padding-inline-end: 12px; font-size: .8rem; }
-  .conversation.session-loading::after { left: calc(50% - 65px); width: 13px; height: 13px; border-width: 2px; }
+  .conversation.session-loading::after { top: 32px; left: calc(50% - 96px); width: 13px; height: 13px; border-width: 2px; }
 }
 
 .thread-item {
