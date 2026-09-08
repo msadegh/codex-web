@@ -71,7 +71,7 @@ textarea:focus-visible {
   display: flex;
   width: 100%;
   height: 100%;
-  direction: ltr;
+  direction: rtl;
 }
 
 .sidebar {
@@ -301,7 +301,7 @@ body.sidebar-collapsed .menu-button {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  direction: rtl;
+  direction: ltr;
   transition: transform .15s ease, filter .15s ease;
   cursor: pointer;
 }
