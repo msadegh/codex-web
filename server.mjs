@@ -1332,28 +1332,25 @@ async function providerRpc(method, params = {}) {
 }
 
 async function listAllThreads(params = {}) {
+  let cursor = {};
+  if (params.cursor) {
+    try { cursor = JSON.parse(Buffer.from(String(params.cursor), "base64url").toString("utf8")); } catch { cursor = {}; }
+  }
   const results = await Promise.allSettled([
-    providerRpc("thread/list", { ...params, provider: "codex" }),
-    claudeProvider.rpc("thread/list", withoutProvider(params)),
+    providerRpc("thread/list", { ...params, cursor: cursor.codex || null, provider: "codex" }),
+    claudeProvider.rpc("thread/list", { ...withoutProvider(params), cursor: cursor.claude || null }),
   ]);
   const codex = results[0].status === "fulfilled" ? results[0].value : { data: [] };
   const claude = results[1].status === "fulfilled" ? results[1].value : { data: [] };
-  if (results.every((result) => result.status === "rejected")) {
-    throw results[0].reason || results[1].reason;
-  }
-  return {
-    data: [
-      ...(codex.data || []).map((thread) => ({
-        ...thread,
-        provider: thread.provider || "codex",
-        providerThreadId: thread.providerThreadId || thread.id,
-      })),
-      ...(claude.data || []),
-    ].sort(
-      (left, right) => (right.updatedAt || 0) - (left.updatedAt || 0),
-    ),
-    nextCursor: null,
-  };
+  if (results.every((result) => result.status === "rejected")) throw results[0].reason || results[1].reason;
+  const data = [
+    ...(codex.data || []).map((thread) => ({ ...thread, provider: thread.provider || "codex", providerThreadId: thread.providerThreadId || thread.id })),
+    ...(claude.data || []),
+  ].sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+  const nextCursor = codex.nextCursor || claude.nextCursor
+    ? Buffer.from(JSON.stringify({ codex: codex.nextCursor || null, claude: claude.nextCursor || null }), "utf8").toString("base64url")
+    : null;
+  return { data, nextCursor };
 }
 
 async function serveStatic(req, res, url) {

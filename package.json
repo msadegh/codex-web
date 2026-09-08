@@ -1,6 +1,6 @@
 {
   "name": "codex-web",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "type": "module",
   "description": "An unofficial, localhost-only browser interface for Codex CLI and Claude Code CLI.",
   "repository": {

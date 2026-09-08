@@ -292,13 +292,18 @@ body.sidebar-collapsed .menu-button {
   width: 100%;
   margin: 8px 0;
   padding: 9px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--accent);
   border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  transition: transform .15s ease, filter .15s ease;
   cursor: pointer;
 }
-.thread-load-more:disabled { cursor: wait; opacity: 0.65; }
+.thread-load-more:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
+.thread-load-more:disabled { cursor: wait; opacity: 0.8; }
+.button-spinner { display:inline-block; width:13px; height:13px; margin-inline-end:8px; vertical-align:-2px; border:2px solid currentColor; border-left-color:transparent; border-radius:50%; animation:button-spin .7s linear infinite; }
+@keyframes button-spin { to { transform:rotate(360deg); } }
 
 .conversation.session-loading::before {
   content: "در حال باز کردن گفتگو…";
@@ -306,17 +311,18 @@ body.sidebar-collapsed .menu-button {
   top: 18px;
   left: 50%;
   transform: translateX(-50%);
-  padding: 8px 14px;
-  border: 1px solid var(--line);
+  padding: 13px 20px 13px 44px;
+  border: 1px solid var(--accent);
   border-radius: 999px;
   background: var(--panel);
-  color: var(--muted);
-  font-size: .82rem;
-  animation: session-pulse 1.4s ease-in-out infinite;
+  color: var(--text);
+  font-size: .9rem;
+  font-weight: 700;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 18%);
   z-index: 2;
 }
 .conversation { position: relative; }
-@keyframes session-pulse { 50% { opacity: .45; } }
+.conversation.session-loading::after { content:""; position:absolute; top:17px; left:calc(50% - 45px); width:16px; height:16px; border:3px solid var(--accent); border-left-color:transparent; border-radius:50%; animation:button-spin .7s linear infinite; z-index:3; }
 
 .thread-item {
   position: relative;

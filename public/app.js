@@ -2406,7 +2406,15 @@ function renderThreadList() {
     more.className = "thread-load-more";
     more.type = "button";
     more.disabled = state.threadListLoading && !state.threads.length;
-    more.textContent = state.threadListLoading && !state.threads.length ? "در حال دریافت…" : "گفتگوهای بیشتر";
+    more.replaceChildren();
+    if (state.threadListLoading) {
+      const spinner = document.createElement("span");
+      spinner.className = "button-spinner";
+      spinner.setAttribute("aria-hidden", "true");
+      more.append(spinner, document.createTextNode("در حال دریافت…"));
+    } else {
+      more.textContent = "گفتگوهای بیشتر";
+    }
     more.addEventListener("click", () => void refreshThreads(elements.threadSearch.value.trim(), { append: true }));
     elements.threadList.append(more);
   }
