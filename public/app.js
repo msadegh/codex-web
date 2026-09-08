@@ -1846,6 +1846,7 @@ function setBusy(busy, turnId = null) {
 
 function setNavigating(navigating) {
   state.navigating = navigating;
+  elements.conversation.classList.toggle("session-loading", navigating);
   if (navigating) {
     closeSlashCommandMenu();
     closeComposerToolsMenu();
@@ -2357,7 +2358,6 @@ function renderThreadList() {
     empty.className = "thread-empty";
     empty.textContent = state.threadListLoading ? "در حال دریافت گفتگوها…" : "هنوز گفتگویی پیدا نشد.";
     elements.threadList.append(empty);
-    if (state.threadListLoading) return;
   }
 
   for (const thread of state.threads) {
@@ -2405,8 +2405,8 @@ function renderThreadList() {
     const more = document.createElement("button");
     more.className = "thread-load-more";
     more.type = "button";
-    more.disabled = state.threadListLoading;
-    more.textContent = state.threadListLoading ? "در حال دریافت…" : "گفتگوهای بیشتر";
+    more.disabled = state.threadListLoading && !state.threads.length;
+    more.textContent = state.threadListLoading && !state.threads.length ? "در حال دریافت…" : "گفتگوهای بیشتر";
     more.addEventListener("click", () => void refreshThreads(elements.threadSearch.value.trim(), { append: true }));
     elements.threadList.append(more);
   }

@@ -300,6 +300,24 @@ body.sidebar-collapsed .menu-button {
 }
 .thread-load-more:disabled { cursor: wait; opacity: 0.65; }
 
+.conversation.session-loading::before {
+  content: "در حال باز کردن گفتگو…";
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: .82rem;
+  animation: session-pulse 1.4s ease-in-out infinite;
+  z-index: 2;
+}
+.conversation { position: relative; }
+@keyframes session-pulse { 50% { opacity: .45; } }
+
 .thread-item {
   position: relative;
   display: flex;
