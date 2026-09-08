@@ -1847,6 +1847,7 @@ function setBusy(busy, turnId = null) {
 function setNavigating(navigating) {
   state.navigating = navigating;
   elements.conversation.classList.toggle("session-loading", navigating);
+  if (navigating) elements.welcome.classList.add("hidden");
   if (navigating) {
     closeSlashCommandMenu();
     closeComposerToolsMenu();
@@ -3568,6 +3569,9 @@ async function openThread(
   state.threadEventBacklog.set(threadId, []);
   try {
     elements.threadTitle.textContent = "در حال باز کردن…";
+    // Give the browser a paint opportunity so loading is visible even when
+    // the transcript is served from the local resume cache.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     const cacheKey = `${threadId}:${JSON.stringify(resumeOverrides)}`;
     let result = state.threadCache.get(cacheKey);
     if (!result) {
@@ -3596,6 +3600,7 @@ async function openThread(
     elements.threadTitle.textContent = state.currentThread
       ? threadDisplayTitle(state.currentThread)
       : "گفتگوی تازه";
+    if (!state.currentThreadId) elements.welcome.classList.remove("hidden");
     if (historyMode === "none") restoreCurrentViewUrl();
     updateConnection();
     return false;
