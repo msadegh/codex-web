@@ -2355,9 +2355,9 @@ function renderThreadList() {
   if (!state.threads.length) {
     const empty = document.createElement("div");
     empty.className = "thread-empty";
-    empty.textContent = "هنوز گفتگویی پیدا نشد.";
+    empty.textContent = state.threadListLoading ? "در حال دریافت گفتگوها…" : "هنوز گفتگویی پیدا نشد.";
     elements.threadList.append(empty);
-    return;
+    if (state.threadListLoading) return;
   }
 
   for (const thread of state.threads) {
@@ -2401,6 +2401,15 @@ function renderThreadList() {
     button.append(heading, meta);
     elements.threadList.append(button);
   }
+  if (state.threadListHasMore || state.threadListLoading) {
+    const more = document.createElement("button");
+    more.className = "thread-load-more";
+    more.type = "button";
+    more.disabled = state.threadListLoading;
+    more.textContent = state.threadListLoading ? "در حال دریافت…" : "گفتگوهای بیشتر";
+    more.addEventListener("click", () => void refreshThreads(elements.threadSearch.value.trim(), { append: true }));
+    elements.threadList.append(more);
+  }
 }
 
 async function refreshThreads(searchTerm = elements.threadSearch.value.trim(), { append = false } = {}) {
@@ -2412,6 +2421,7 @@ async function refreshThreads(searchTerm = elements.threadSearch.value.trim(), {
   }
   const refreshVersion = ++state.threadsRefreshVersion;
   state.threadListLoading = true;
+  renderThreadList();
   try {
     const result = await rpc("thread/list", {
       archived: false,

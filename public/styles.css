@@ -287,6 +287,19 @@ body.sidebar-collapsed .menu-button {
   text-align: center;
 }
 
+.thread-load-more {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.thread-load-more:disabled { cursor: wait; opacity: 0.65; }
+
 .thread-item {
   position: relative;
   display: flex;
