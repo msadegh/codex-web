@@ -370,6 +370,9 @@ const state = {
   threadTokenUsage: new Map(),
   threads: [],
   threadsRefreshVersion: 0,
+  threadListCursor: null,
+  threadListLoading: false,
+  threadListHasMore: true,
   // Bounded cache avoids rereading large transcripts when revisiting sessions.
   threadCache: new Map(),
   urlHydrationActiveKey: null,
@@ -2400,24 +2403,36 @@ function renderThreadList() {
   }
 }
 
-async function refreshThreads(searchTerm = elements.threadSearch.value.trim()) {
+async function refreshThreads(searchTerm = elements.threadSearch.value.trim(), { append = false } = {}) {
+  if (state.threadListLoading) return;
+  if (append && !state.threadListHasMore) return;
+  if (!append) {
+    state.threadListCursor = null;
+    state.threadListHasMore = true;
+  }
   const refreshVersion = ++state.threadsRefreshVersion;
+  state.threadListLoading = true;
   try {
     const result = await rpc("thread/list", {
       archived: false,
-      limit: 100,
+      limit: 10,
+      cursor: append ? state.threadListCursor : null,
       searchTerm: searchTerm || null,
       sortDirection: "desc",
       sortKey: "updated_at",
     });
     if (refreshVersion !== state.threadsRefreshVersion) return;
-    state.threads = result.data || [];
+    state.threads = append ? [...state.threads, ...(result.data || [])] : (result.data || []);
+    state.threadListCursor = result.nextCursor || null;
+    state.threadListHasMore = Boolean(result.nextCursor) && (result.data || []).length > 0;
     for (const thread of state.threads) syncThreadActivity(thread);
     renderThreadList();
     updateAttentionUi();
   } catch (error) {
     if (refreshVersion !== state.threadsRefreshVersion) return;
     showError(error, "دریافت فهرست گفتگوها");
+  } finally {
+    state.threadListLoading = false;
   }
 }
 
@@ -5216,6 +5231,10 @@ elements.sessionInput.addEventListener("change", () => {
 elements.threadList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-thread-id]");
   if (button) openThread(button.dataset.threadId);
+});
+elements.threadList.addEventListener("scroll", () => {
+  const remaining = elements.threadList.scrollHeight - elements.threadList.scrollTop - elements.threadList.clientHeight;
+  if (remaining < 160) void refreshThreads(elements.threadSearch.value.trim(), { append: true });
 });
 elements.threadSearch.addEventListener("input", () => {
   clearTimeout(searchTimer);
