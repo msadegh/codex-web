@@ -370,6 +370,8 @@ const state = {
   threadTokenUsage: new Map(),
   threads: [],
   threadsRefreshVersion: 0,
+  // Bounded cache avoids rereading large transcripts when revisiting sessions.
+  threadCache: new Map(),
   urlHydrationActiveKey: null,
   urlHydrationPending: null,
   urlHydrated: false,
@@ -3529,7 +3531,15 @@ async function openThread(
   state.threadEventBacklog.set(threadId, []);
   try {
     elements.threadTitle.textContent = "در حال باز کردن…";
-    const result = await rpc("thread/resume", { threadId, ...resumeOverrides });
+    const cacheKey = `${threadId}:${JSON.stringify(resumeOverrides)}`;
+    let result = state.threadCache.get(cacheKey);
+    if (!result) {
+      result = await rpc("thread/resume", { threadId, ...resumeOverrides });
+      state.threadCache.set(cacheKey, result);
+      while (state.threadCache.size > 8) {
+        state.threadCache.delete(state.threadCache.keys().next().value);
+      }
+    }
     if (navigationVersion !== state.navigationVersion) return false;
     setCurrentThread(result.thread, result);
     renderHistory(result.thread);
