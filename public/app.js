@@ -3553,6 +3553,9 @@ async function openThread(
   closeInteractionDialogs();
   state.openingThreadId = threadId;
   setNavigating(true);
+  // Reflect the selected session immediately; transcript loading may take a
+  // while for large conversations and the URL is useful on its own.
+  updateThreadUrl(threadId, historyMode);
   state.threadEventBacklog.set(threadId, []);
   try {
     elements.threadTitle.textContent = "در حال باز کردن…";
@@ -3569,7 +3572,7 @@ async function openThread(
     setCurrentThread(result.thread, result);
     renderHistory(result.thread);
     flushThreadEventBacklog(result.thread.id);
-    updateThreadUrl(result.thread.id, historyMode);
+    updateThreadUrl(result.thread.id, "replace");
     state.openingThreadId = null;
     setNavigating(false);
     updateConnection();
@@ -5241,10 +5244,6 @@ elements.sessionInput.addEventListener("change", () => {
 elements.threadList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-thread-id]");
   if (button) openThread(button.dataset.threadId);
-});
-elements.threadList.addEventListener("scroll", () => {
-  const remaining = elements.threadList.scrollHeight - elements.threadList.scrollTop - elements.threadList.clientHeight;
-  if (remaining < 160) void refreshThreads(elements.threadSearch.value.trim(), { append: true });
 });
 elements.threadSearch.addEventListener("input", () => {
   clearTimeout(searchTimer);
