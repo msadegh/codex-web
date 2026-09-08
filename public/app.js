@@ -3561,6 +3561,7 @@ async function openThread(
   closeInteractionDialogs();
   state.openingThreadId = threadId;
   setNavigating(true);
+  clearConversation();
   // Reflect the selected session immediately; transcript loading may take a
   // while for large conversations and the URL is useful on its own.
   updateThreadUrl(threadId, historyMode);
