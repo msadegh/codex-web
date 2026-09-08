@@ -311,6 +311,11 @@ body.sidebar-collapsed .menu-button {
   top: 18px;
   left: 50%;
   transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  white-space: nowrap;
+  text-align: center;
   padding: 13px 20px 13px 44px;
   border: 1px solid var(--accent);
   border-radius: 999px;
@@ -323,6 +328,10 @@ body.sidebar-collapsed .menu-button {
 }
 .conversation { position: relative; }
 .conversation.session-loading::after { content:""; position:absolute; top:17px; left:calc(50% - 45px); width:16px; height:16px; border:3px solid var(--accent); border-left-color:transparent; border-radius:50%; animation:button-spin .7s linear infinite; z-index:3; }
+@media (max-width: 420px) {
+  .conversation.session-loading::before { padding-inline-start: 34px; padding-inline-end: 12px; font-size: .8rem; }
+  .conversation.session-loading::after { left: calc(50% - 40px); width: 13px; height: 13px; border-width: 2px; }
+}
 
 .thread-item {
   position: relative;
