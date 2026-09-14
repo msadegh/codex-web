@@ -1880,6 +1880,45 @@ dialog form,
   display: none !important;
 }
 
+.thread-scope-only {
+  display: none;
+}
+
+.settings-dialog[data-scope="thread"] .thread-scope-only {
+  display: grid;
+}
+
+.settings-dialog[data-provider="claude"] .thread-scope-only {
+  display: none;
+}
+
+.checkbox-control {
+  display: flex;
+  min-height: 40px;
+  padding: 7px 10px;
+  align-items: center;
+  gap: 9px;
+  color: #cbd1c8;
+  background: #0f120f;
+  border: 1px solid #343a33;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.checkbox-control:hover {
+  border-color: #4d5d45;
+}
+
+.checkbox-control input {
+  width: 17px;
+  min-width: 17px;
+  height: 17px;
+  min-height: 17px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .warning-box {
   display: none;
   margin: 2px 0 17px;

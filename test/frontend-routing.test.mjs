@@ -154,12 +154,16 @@ async function createHarness(t, {
   fetchHandler,
   initialUrl = "http://localhost/",
   savedSettings = null,
+  savedThreadSettings = null,
 }) {
   const html = await readFile(INDEX, "utf8");
   const { window } = parseHTML(html);
   const values = new Map();
   if (savedSettings) {
     values.set("codex-web-settings", JSON.stringify(savedSettings));
+  }
+  if (savedThreadSettings) {
+    values.set("codex-web-thread-settings", JSON.stringify(savedThreadSettings));
   }
   Object.defineProperties(window, {
     cancelAnimationFrame: {
@@ -1199,6 +1203,131 @@ test(
     assert.equal(newTurn.params.effort, "medium");
     assert.equal(Object.hasOwn(newTurn.params, "model"), false);
     assert.equal(Object.hasOwn(newTurn.params, "serviceTier"), false);
+  },
+);
+
+test(
+  "Codex sessions can automatically continue for a configured number of capacity failures",
+  { concurrency: false },
+  async (t) => {
+    const thread = {
+      id: "capacity-thread",
+      name: "Capacity test",
+      cwd: "/workspace",
+      createdAt: 1_757_000_000,
+      updatedAt: 1_757_000_060,
+      status: { type: "idle" },
+      turns: [],
+    };
+    const starts = [];
+    const capacityError = "Selected model is at capacity. Please try a different model.";
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") {
+        return jsonResponse({ ready: true, cwd: "/workspace" });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [thread], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({ result: { thread, cwd: thread.cwd } });
+      }
+      if (request.method === "turn/start") {
+        starts.push(request.params);
+        return jsonResponse({
+          result: {
+            turn: {
+              id: `capacity-turn-${starts.length}`,
+              status: "inProgress",
+              items: [],
+              error: null,
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window, values } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=capacity-thread",
+      savedThreadSettings: {
+        [thread.id]: { capacityAutoContinueAttempts: 3 },
+      },
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("#thread-title").textContent === "Capacity test",
+      "capacity thread was not hydrated",
+    );
+
+    document.querySelector("#open-settings").click();
+    const autoContinue = document.querySelector("#capacity-auto-continue");
+    const attempts = document.querySelector("#capacity-auto-continue-attempts");
+    assert.equal(autoContinue.checked, true);
+    assert.equal(attempts.value, "3");
+    document.querySelector("#settings-cancel").click();
+
+    typePrompt(window, "کار اصلی");
+    document.querySelector("#send-message").click();
+    await waitFor(() => starts.length === 1, "initial turn was not started");
+
+    function emitCapacityFailure(turnNumber) {
+      FakeEventSource.latest.emit("rpc", {
+        method: "turn/completed",
+        params: {
+          threadId: thread.id,
+          turn: {
+            id: `capacity-turn-${turnNumber}`,
+            status: "failed",
+            items: [],
+            error: { message: capacityError },
+          },
+        },
+      });
+    }
+
+    emitCapacityFailure(1);
+    await waitFor(
+      () => starts.length === 2,
+      "first continuation turn was not started",
+    );
+    assert.equal(starts[1].input[0].text, "ادامه بده");
+    assert.equal(
+      [...document.querySelectorAll(".message-row.user")].at(-1).textContent.trim(),
+      "ادامه بده",
+    );
+    assert.match(document.querySelector("#toasts").textContent, /ادامه بده/);
+
+    emitCapacityFailure(2);
+    await waitFor(() => starts.length === 3, "second continuation turn was not started");
+    assert.equal(starts[2].input[0].text, "ادامه بده");
+
+    emitCapacityFailure(3);
+    await waitFor(() => starts.length === 4, "third continuation turn was not started");
+    assert.equal(starts[3].input[0].text, "ادامه بده");
+
+    emitCapacityFailure(4);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(starts.length, 4);
+    assert.match(
+      document.querySelector(".error-message").textContent,
+      /Selected model is at capacity/,
+    );
+
+    document.querySelector("#open-settings").click();
+    autoContinue.checked = false;
+    document.querySelector("#save-settings").click();
+    assert.equal(
+      JSON.parse(values.get("codex-web-thread-settings"))[thread.id]
+        .capacityAutoContinueAttempts,
+      undefined,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
   },
 );
 

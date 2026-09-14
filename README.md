@@ -349,6 +349,12 @@ active Claude turn runs in its own non-interactive Claude CLI child process;
 this does not open visible terminal tabs. Work in separate conversations can
 therefore proceed in parallel.
 
+In the conversation settings for a Codex session, you can enable automatic
+continuation after the exact `Selected model is at capacity. Please try a different model.`
+failure. Choose how many times, from 1 to 10, Codex may send `ادامه بده` for
+that failed turn; the setting is stored per session and never retries
+indefinitely if the model remains unavailable.
+
 All conversations still share the server user, environment, CPU, memory, and
 possibly the same working tree. Two agents editing the same files can therefore
 conflict even though their conversation state is isolated.

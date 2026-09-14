@@ -4,6 +4,8 @@ const $ = (selector) => document.querySelector(selector);
 const BASE_DOCUMENT_TITLE = "Codex Web";
 const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
 const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
+const CAPACITY_CONTINUATION_PROMPT = "ادامه بده";
+const CAPACITY_AUTO_CONTINUE_MAX_ATTEMPTS = 10;
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -197,6 +199,8 @@ const elements = {
   approvalSession: $("#approval-session"),
   approvalTitle: $("#approval-title"),
   approvalSelect: $("#approval-select"),
+  capacityAutoContinue: $("#capacity-auto-continue"),
+  capacityAutoContinueAttempts: $("#capacity-auto-continue-attempts"),
   connectionLabel: $("#connection-label"),
   contextUsage: $("#context-usage"),
   contextUsageFill: $("#context-usage-fill"),
@@ -317,6 +321,8 @@ const state = {
   collaborationModes: [],
   completedTurns: new Set(),
   compactPendingThreads: new Set(),
+  capacityAutoContinuationTurns: new Set(),
+  capacityContinuations: new Map(),
   composerModes: new Map(),
   connected: false,
   currentThread: null,
@@ -443,6 +449,18 @@ function threadSetting(threadId = state.currentThreadId) {
 
 function hasSetting(settings, key) {
   return Boolean(settings && Object.hasOwn(settings, key));
+}
+
+function normalizeCapacityAutoContinueAttempts(value) {
+  const attempts = Number(value);
+  if (!Number.isInteger(attempts)) return 0;
+  return Math.min(CAPACITY_AUTO_CONTINUE_MAX_ATTEMPTS, Math.max(0, attempts));
+}
+
+function capacityAutoContinueAttemptsForThread(threadId = state.currentThreadId) {
+  return normalizeCapacityAutoContinueAttempts(
+    threadSetting(threadId)?.capacityAutoContinueAttempts,
+  );
 }
 
 async function api(path, options = {}) {
@@ -1909,6 +1927,7 @@ function selectedThreadSettings(threadId = state.currentThreadId) {
     serviceTier: hasSetting(configured, "serviceTier")
       ? configured.serviceTier
       : runtime.serviceTier || thread?.serviceTier || "",
+    capacityAutoContinueAttempts: capacityAutoContinueAttemptsForThread(threadId),
   };
 }
 
@@ -1987,6 +2006,12 @@ function updateSettingsUi() {
   elements.effortSelect.value = threadValues?.effort ?? state.settings.effort;
   elements.serviceTierSelect.value =
     threadValues?.serviceTier ?? state.settings.serviceTier;
+  elements.capacityAutoContinue.checked =
+    (threadValues?.capacityAutoContinueAttempts || 0) > 0;
+  elements.capacityAutoContinueAttempts.value = String(
+    threadValues?.capacityAutoContinueAttempts || 1,
+  );
+  elements.capacityAutoContinueAttempts.disabled = !elements.capacityAutoContinue.checked;
   elements.sandboxSelect.value = state.settings.sandbox;
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
@@ -2033,6 +2058,11 @@ function saveSettings() {
       return;
     }
     const provider = effectiveProvider();
+    const existing = threadSetting(state.currentThreadId) || {};
+    const capacityAttempts =
+      provider === "codex" && elements.capacityAutoContinue.checked
+        ? normalizeCapacityAutoContinueAttempts(elements.capacityAutoContinueAttempts.value) || 1
+        : 0;
     const configured = {
       effort: elements.effortSelect.value,
       model: elements.modelSelect.value,
@@ -2040,6 +2070,11 @@ function saveSettings() {
         ? { serviceTier: elements.serviceTierSelect.value }
         : {}),
     };
+    if (capacityAttempts > 0) {
+      configured.capacityAutoContinueAttempts = capacityAttempts;
+    } else if (provider === "codex" && hasSetting(existing, "capacityAutoContinueAttempts")) {
+      delete configured.capacityAutoContinueAttempts;
+    }
     state.threadSettings.set(state.currentThreadId, configured);
     persistThreadSettings();
     const runtime = { ...(state.threadRuntime.get(state.currentThreadId) || {}) };
@@ -4127,7 +4162,150 @@ function terminalTurnPhase(status) {
   return "completed";
 }
 
-function finishVisibleTurn(turn) {
+function errorMessage(value) {
+  if (typeof value === "string") return value;
+  return value?.message || value?.error?.message || value?.details?.message || "";
+}
+
+function isModelCapacityError(value) {
+  return /Selected model is at capacity\.\s*Please try a different model\./i.test(
+    errorMessage(value),
+  );
+}
+
+function markCapacityContinuationTurn(threadId, turnId) {
+  const continuation = state.capacityContinuations.get(threadId);
+  if (!continuation || !turnId) return false;
+  continuation.turnId = turnId;
+  continuation.accepted = true;
+  state.capacityAutoContinuationTurns.add(turnEventKey(threadId, turnId));
+  return true;
+}
+
+function capacityContinuationForTurn(threadId, turnId) {
+  const key = turnEventKey(threadId, turnId);
+  const continuation = state.capacityContinuations.get(threadId);
+  const matchesPendingContinuation =
+    continuation &&
+    turnId !== continuation.sourceTurnId &&
+    (!continuation.turnId || continuation.turnId === turnId);
+  if (!state.capacityAutoContinuationTurns.has(key) && !matchesPendingContinuation) {
+    return null;
+  }
+  state.capacityAutoContinuationTurns.delete(key);
+  if (continuation) continuation.accepted = true;
+  return continuation || { remainingAttempts: 0 };
+}
+
+async function sendAutomaticCapacityContinuation(threadId) {
+  const continuation = state.capacityContinuations.get(threadId);
+  if (
+    !continuation ||
+    continuation.sending ||
+    continuation.remainingAttempts <= 0 ||
+    providerForThread(threadId) !== "codex"
+  ) {
+    return false;
+  }
+
+  continuation.sending = true;
+  continuation.remainingAttempts -= 1;
+  continuation.turnId = null;
+  const clientUserMessageId = crypto.randomUUID();
+  continuation.clientUserMessageId = clientUserMessageId;
+  const visible = threadId === state.currentThreadId;
+  const input = [{ type: "text", text: CAPACITY_CONTINUATION_PROMPT }];
+
+  if (visible) {
+    renderOptimisticUserMessage(clientUserMessageId, input);
+    scrollToBottom(true, true);
+    setBusy(true);
+  } else {
+    updateThreadActivity(threadId, {
+      phase: "running",
+      terminalPhase: null,
+      turnId: null,
+      unread: false,
+    });
+  }
+  if (visible) {
+    toast("مدل در دسترس نبود؛ «ادامه بده» به‌صورت خودکار ارسال شد.", "warning", {
+      duration: 7000,
+    });
+  }
+
+  try {
+    const params = {
+      clientUserMessageId,
+      input,
+      threadId,
+      provider: "codex",
+      developerInstructions: RESPONSE_STYLE_INSTRUCTIONS,
+    };
+    const configured = threadSetting(threadId);
+    if (configured && hasSetting(configured, "effort")) {
+      params.effort = configured.effort || null;
+    } else if (state.settings.effort) {
+      params.effort = state.settings.effort;
+    }
+    if (configured && hasSetting(configured, "model")) {
+      params.model = configured.model || null;
+    }
+    if (configured && hasSetting(configured, "serviceTier")) {
+      params.serviceTier = configured.serviceTier || null;
+    }
+    const result = await rpc("turn/start", params);
+    continuation.accepted = true;
+    markCapacityContinuationTurn(threadId, result?.turn?.id || null);
+    if (visible && continuation.turnId) {
+      setBusy(true, continuation.turnId);
+    }
+    settleOptimisticUserMessage(clientUserMessageId);
+    continuation.sending = false;
+    if (continuation.retryAfterStart) {
+      continuation.retryAfterStart = false;
+      return (await sendAutomaticCapacityContinuation(threadId)) || true;
+    }
+    return true;
+  } catch (error) {
+    if (continuation.accepted) {
+      settleOptimisticUserMessage(clientUserMessageId);
+      continuation.sending = false;
+      return true;
+    }
+    state.capacityContinuations.delete(threadId);
+    continuation.sending = false;
+    if (visible) {
+      rollbackOptimisticUserMessage(clientUserMessageId);
+      setBusy(false);
+      scheduleNextQueuedPrompt(threadId);
+    }
+    showError(error, "ادامهٔ خودکار");
+    return false;
+  }
+}
+
+function startAutomaticCapacityContinuation(threadId, sourceTurnId, attempts) {
+  const normalizedAttempts = normalizeCapacityAutoContinueAttempts(attempts);
+  if (
+    !threadId ||
+    providerForThread(threadId) !== "codex" ||
+    normalizedAttempts <= 0 ||
+    state.capacityContinuations.has(threadId)
+  ) {
+    return false;
+  }
+  state.capacityContinuations.set(threadId, {
+    accepted: false,
+    remainingAttempts: normalizedAttempts,
+    sourceTurnId,
+    turnId: null,
+    sending: false,
+  });
+  return sendAutomaticCapacityContinuation(threadId);
+}
+
+function finishVisibleTurn(turn, { showError = true } = {}) {
   setBusy(false);
   for (const view of state.itemViews.values()) {
     if (view.type === "reasoning" && view.element?.classList.contains("running")) {
@@ -4137,8 +4315,8 @@ function finishVisibleTurn(turn) {
     view.content?.classList.remove("streaming-cursor");
     view.element?.classList.remove("running");
   }
-  if (turn?.status === "failed") {
-    appendTurnError(turn.error?.message || "اجرای turn ناموفق بود.");
+  if (showError && turn?.status === "failed") {
+    appendTurnError(errorMessage(turn.error) || "اجرای turn ناموفق بود.");
   }
 }
 
@@ -4288,6 +4466,7 @@ function handleNotification(message) {
 
   if (method === "turn/started" && threadId) {
     const turnId = params.turn?.id || null;
+    markCapacityContinuationTurn(threadId, turnId);
     state.compactPendingThreads.delete(threadId);
     updateThreadActivity(threadId, {
       phase: hasPendingInteractionForThread(threadId) ? "needs-input" : "running",
@@ -4306,6 +4485,15 @@ function handleNotification(message) {
     const turn = params.turn || {};
     const turnId = turn.id || "unknown";
     const key = turnEventKey(threadId, turnId);
+    const continuation = capacityContinuationForTurn(threadId, turnId);
+    const wasAutomaticCapacityContinuation = Boolean(continuation);
+    const isCapacityFailure = turn.status === "failed" && isModelCapacityError(turn.error);
+    const shouldAutoContinue =
+      isCapacityFailure &&
+      (wasAutomaticCapacityContinuation
+        ? continuation.remainingAttempts > 0
+        : capacityAutoContinueAttemptsForThread(threadId) > 0);
+    const willAutoContinue = shouldAutoContinue;
     state.compactPendingThreads.delete(threadId);
     state.completedTurns.add(key);
 
@@ -4323,14 +4511,36 @@ function handleNotification(message) {
 
     if (!state.notifiedTurns.has(key)) {
       state.notifiedTurns.add(key);
-      void playCompletionSoundOnce(key, turn.status);
-      if (isUnseen) {
-        announceThreadCompletion(threadId, turn.status);
+      if (!willAutoContinue) {
+        void playCompletionSoundOnce(key, turn.status);
+        if (isUnseen) {
+          announceThreadCompletion(threadId, turn.status);
+        }
       }
     }
 
     if (!isBackground && isTrackedTurn) {
-      finishVisibleTurn(turn);
+      finishVisibleTurn(turn, { showError: !willAutoContinue });
+    }
+    const autoContinuationStarted =
+      willAutoContinue
+        ? wasAutomaticCapacityContinuation
+          ? continuation.sending
+            ? (() => {
+                continuation.retryAfterStart = true;
+                return true;
+              })()
+            : sendAutomaticCapacityContinuation(threadId)
+          : startAutomaticCapacityContinuation(
+              threadId,
+              turnId,
+              capacityAutoContinueAttemptsForThread(threadId),
+            )
+        : null;
+    if (wasAutomaticCapacityContinuation && !willAutoContinue) {
+      state.capacityContinuations.delete(threadId);
+    }
+    if (!isBackground && isTrackedTurn && !autoContinuationStarted) {
       scheduleNextQueuedPrompt(threadId);
     }
     renderThreadList();
@@ -5295,6 +5505,10 @@ elements.providerSelect.addEventListener("change", () => {
 elements.claudePermissionMode.addEventListener("change", () =>
   updateFullAccessWarning(elements.providerSelect.value),
 );
+elements.capacityAutoContinue.addEventListener("change", () => {
+  elements.capacityAutoContinueAttempts.disabled =
+    !elements.capacityAutoContinue.checked;
+});
 elements.sandboxSelect.addEventListener("change", () =>
   updateFullAccessWarning(elements.providerSelect.value),
 );
