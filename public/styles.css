@@ -1919,6 +1919,33 @@ dialog form,
   accent-color: var(--accent);
 }
 
+.capacity-attempts-control {
+  display: grid;
+  gap: 6px;
+  color: #cbd1c8;
+  font-size: 0.76rem;
+}
+
+.capacity-attempts-control input,
+.capacity-prompt-field textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 10px;
+  background: #0f120f;
+  border: 1px solid #343a33;
+  border-radius: 9px;
+  outline: 0;
+}
+
+.capacity-prompt-field {
+  margin: 0;
+}
+
+.capacity-attempts-control input:focus,
+.capacity-prompt-field textarea:focus {
+  border-color: #617251;
+}
+
 .warning-box {
   display: none;
   margin: 2px 0 17px;

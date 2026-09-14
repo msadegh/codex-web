@@ -5,7 +5,6 @@ const BASE_DOCUMENT_TITLE = "Codex Web";
 const NEW_THREAD_DRAFT_PREFIX = "__new_thread__";
 const OPTIMISTIC_USER_MESSAGE_PREFIX = "__optimistic_user_message__";
 const CAPACITY_CONTINUATION_PROMPT = "ادامه بده";
-const CAPACITY_AUTO_CONTINUE_MAX_ATTEMPTS = 10;
 const MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_IMAGES_PER_BATCH = 20;
 const CLAUDE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -201,6 +200,7 @@ const elements = {
   approvalSelect: $("#approval-select"),
   capacityAutoContinue: $("#capacity-auto-continue"),
   capacityAutoContinueAttempts: $("#capacity-auto-continue-attempts"),
+  capacityAutoContinuePrompt: $("#capacity-auto-continue-prompt"),
   connectionLabel: $("#connection-label"),
   contextUsage: $("#context-usage"),
   contextUsageFill: $("#context-usage-fill"),
@@ -453,14 +453,20 @@ function hasSetting(settings, key) {
 
 function normalizeCapacityAutoContinueAttempts(value) {
   const attempts = Number(value);
-  if (!Number.isInteger(attempts)) return 0;
-  return Math.min(CAPACITY_AUTO_CONTINUE_MAX_ATTEMPTS, Math.max(0, attempts));
+  if (!Number.isSafeInteger(attempts) || attempts < 0) return 0;
+  return attempts;
 }
 
 function capacityAutoContinueAttemptsForThread(threadId = state.currentThreadId) {
   return normalizeCapacityAutoContinueAttempts(
     threadSetting(threadId)?.capacityAutoContinueAttempts,
   );
+}
+
+function capacityAutoContinuePromptForThread(threadId = state.currentThreadId) {
+  const configured = threadSetting(threadId)?.capacityAutoContinuePrompt;
+  const prompt = typeof configured === "string" ? configured.trim() : "";
+  return prompt || CAPACITY_CONTINUATION_PROMPT;
 }
 
 async function api(path, options = {}) {
@@ -1928,6 +1934,7 @@ function selectedThreadSettings(threadId = state.currentThreadId) {
       ? configured.serviceTier
       : runtime.serviceTier || thread?.serviceTier || "",
     capacityAutoContinueAttempts: capacityAutoContinueAttemptsForThread(threadId),
+    capacityAutoContinuePrompt: capacityAutoContinuePromptForThread(threadId),
   };
 }
 
@@ -2012,6 +2019,9 @@ function updateSettingsUi() {
     threadValues?.capacityAutoContinueAttempts || 1,
   );
   elements.capacityAutoContinueAttempts.disabled = !elements.capacityAutoContinue.checked;
+  elements.capacityAutoContinuePrompt.value =
+    threadValues?.capacityAutoContinuePrompt || CAPACITY_CONTINUATION_PROMPT;
+  elements.capacityAutoContinuePrompt.disabled = !elements.capacityAutoContinue.checked;
   elements.sandboxSelect.value = state.settings.sandbox;
   elements.approvalSelect.value = state.settings.approvalPolicy;
   elements.personalitySelect.value = state.settings.personality;
@@ -2059,10 +2069,22 @@ function saveSettings() {
     }
     const provider = effectiveProvider();
     const existing = threadSetting(state.currentThreadId) || {};
-    const capacityAttempts =
-      provider === "codex" && elements.capacityAutoContinue.checked
-        ? normalizeCapacityAutoContinueAttempts(elements.capacityAutoContinueAttempts.value) || 1
-        : 0;
+    const autoContinueEnabled =
+      provider === "codex" && elements.capacityAutoContinue.checked;
+    const capacityAttempts = autoContinueEnabled
+      ? normalizeCapacityAutoContinueAttempts(elements.capacityAutoContinueAttempts.value)
+      : 0;
+    const capacityPrompt = autoContinueEnabled
+      ? elements.capacityAutoContinuePrompt.value.trim()
+      : "";
+    if (autoContinueEnabled && capacityAttempts < 1) {
+      toast("تعداد تلاش‌ها باید یک عدد صحیح مثبت باشد.", "warning");
+      return;
+    }
+    if (autoContinueEnabled && !capacityPrompt) {
+      toast("متن پیام خودکار نمی‌تواند خالی باشد.", "warning");
+      return;
+    }
     const configured = {
       effort: elements.effortSelect.value,
       model: elements.modelSelect.value,
@@ -2072,8 +2094,10 @@ function saveSettings() {
     };
     if (capacityAttempts > 0) {
       configured.capacityAutoContinueAttempts = capacityAttempts;
+      configured.capacityAutoContinuePrompt = capacityPrompt;
     } else if (provider === "codex" && hasSetting(existing, "capacityAutoContinueAttempts")) {
       delete configured.capacityAutoContinueAttempts;
+      delete configured.capacityAutoContinuePrompt;
     }
     state.threadSettings.set(state.currentThreadId, configured);
     persistThreadSettings();
@@ -4214,7 +4238,7 @@ async function sendAutomaticCapacityContinuation(threadId) {
   const clientUserMessageId = crypto.randomUUID();
   continuation.clientUserMessageId = clientUserMessageId;
   const visible = threadId === state.currentThreadId;
-  const input = [{ type: "text", text: CAPACITY_CONTINUATION_PROMPT }];
+  const input = [{ type: "text", text: capacityAutoContinuePromptForThread(threadId) }];
 
   if (visible) {
     renderOptimisticUserMessage(clientUserMessageId, input);
@@ -4229,7 +4253,7 @@ async function sendAutomaticCapacityContinuation(threadId) {
     });
   }
   if (visible) {
-    toast("مدل در دسترس نبود؛ «ادامه بده» به‌صورت خودکار ارسال شد.", "warning", {
+    toast("مدل در دسترس نبود؛ پیام خودکار ارسال شد.", "warning", {
       duration: 7000,
     });
   }
@@ -5507,6 +5531,8 @@ elements.claudePermissionMode.addEventListener("change", () =>
 );
 elements.capacityAutoContinue.addEventListener("change", () => {
   elements.capacityAutoContinueAttempts.disabled =
+    !elements.capacityAutoContinue.checked;
+  elements.capacityAutoContinuePrompt.disabled =
     !elements.capacityAutoContinue.checked;
 });
 elements.sandboxSelect.addEventListener("change", () =>

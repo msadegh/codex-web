@@ -1256,7 +1256,10 @@ test(
       fetchHandler,
       initialUrl: "http://localhost/?session=capacity-thread",
       savedThreadSettings: {
-        [thread.id]: { capacityAutoContinueAttempts: 3 },
+        [thread.id]: {
+          capacityAutoContinueAttempts: 12,
+          capacityAutoContinuePrompt: "وضعیت را دوباره بررسی کن",
+        },
       },
     });
     const document = window.document;
@@ -1268,8 +1271,10 @@ test(
     document.querySelector("#open-settings").click();
     const autoContinue = document.querySelector("#capacity-auto-continue");
     const attempts = document.querySelector("#capacity-auto-continue-attempts");
+    const promptInput = document.querySelector("#capacity-auto-continue-prompt");
     assert.equal(autoContinue.checked, true);
-    assert.equal(attempts.value, "3");
+    assert.equal(attempts.value, "12");
+    assert.equal(promptInput.value, "وضعیت را دوباره بررسی کن");
     document.querySelector("#settings-cancel").click();
 
     typePrompt(window, "کار اصلی");
@@ -1296,24 +1301,25 @@ test(
       () => starts.length === 2,
       "first continuation turn was not started",
     );
-    assert.equal(starts[1].input[0].text, "ادامه بده");
+    assert.equal(starts[1].input[0].text, "وضعیت را دوباره بررسی کن");
     assert.equal(
       [...document.querySelectorAll(".message-row.user")].at(-1).textContent.trim(),
-      "ادامه بده",
+      "وضعیت را دوباره بررسی کن",
     );
-    assert.match(document.querySelector("#toasts").textContent, /ادامه بده/);
+    assert.match(document.querySelector("#toasts").textContent, /پیام خودکار/);
 
-    emitCapacityFailure(2);
-    await waitFor(() => starts.length === 3, "second continuation turn was not started");
-    assert.equal(starts[2].input[0].text, "ادامه بده");
+    for (let turnNumber = 2; turnNumber <= 12; turnNumber += 1) {
+      emitCapacityFailure(turnNumber);
+      await waitFor(
+        () => starts.length === turnNumber + 1,
+        `continuation turn ${turnNumber} was not started`,
+      );
+      assert.equal(starts[turnNumber].input[0].text, "وضعیت را دوباره بررسی کن");
+    }
 
-    emitCapacityFailure(3);
-    await waitFor(() => starts.length === 4, "third continuation turn was not started");
-    assert.equal(starts[3].input[0].text, "ادامه بده");
-
-    emitCapacityFailure(4);
+    emitCapacityFailure(13);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(starts.length, 4);
+    assert.equal(starts.length, 13);
     assert.match(
       document.querySelector(".error-message").textContent,
       /Selected model is at capacity/,
@@ -1325,6 +1331,11 @@ test(
     assert.equal(
       JSON.parse(values.get("codex-web-thread-settings"))[thread.id]
         .capacityAutoContinueAttempts,
+      undefined,
+    );
+    assert.equal(
+      JSON.parse(values.get("codex-web-thread-settings"))[thread.id]
+        .capacityAutoContinuePrompt,
       undefined,
     );
     await new Promise((resolve) => setTimeout(resolve, 50));

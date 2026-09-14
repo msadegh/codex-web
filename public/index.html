@@ -487,24 +487,29 @@
           <span>ادامهٔ خودکار پس از خطای ظرفیت مدل</span>
           <label class="checkbox-control">
             <input id="capacity-auto-continue" type="checkbox" />
-            <span>ارسال خودکار «ادامه بده»</span>
+            <span>ارسال خودکار پیام</span>
           </label>
           <label class="capacity-attempts-control">
             <span>تعداد تلاش‌ها</span>
-            <select id="capacity-auto-continue-attempts" dir="ltr">
-              <option value="1">۱ بار</option>
-              <option value="2">۲ بار</option>
-              <option value="3">۳ بار</option>
-              <option value="4">۴ بار</option>
-              <option value="5">۵ بار</option>
-              <option value="6">۶ بار</option>
-              <option value="7">۷ بار</option>
-              <option value="8">۸ بار</option>
-              <option value="9">۹ بار</option>
-              <option value="10">۱۰ بار</option>
-            </select>
+            <input
+              id="capacity-auto-continue-attempts"
+              type="number"
+              min="1"
+              step="1"
+              inputmode="numeric"
+              dir="ltr"
+            />
           </label>
-          <small>پس از هر خطای ظرفیت، تا این تعداد پیام «ادامه بده» فرستاده می‌شود.</small>
+          <label class="field capacity-prompt-field">
+            <span>متن پیام خودکار</span>
+            <textarea
+              id="capacity-auto-continue-prompt"
+              rows="2"
+              dir="auto"
+            ></textarea>
+            <small>پیش‌فرض: «ادامه بده». همین متن پس از هر خطای ظرفیت ارسال می‌شود.</small>
+          </label>
+          <small>تعداد retry یک عدد صحیح مثبت است و به گزینه‌های محدود وابسته نیست.</small>
         </div>
 
         <div class="field-grid codex-only-setting default-scope-only">

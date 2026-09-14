@@ -351,9 +351,9 @@ therefore proceed in parallel.
 
 In the conversation settings for a Codex session, you can enable automatic
 continuation after the exact `Selected model is at capacity. Please try a different model.`
-failure. Choose how many times, from 1 to 10, Codex may send `ادامه بده` for
-that failed turn; the setting is stored per session and never retries
-indefinitely if the model remains unavailable.
+failure. Set any positive integer retry count and edit the message Codex should
+send; the default message is `ادامه بده`. Both values are stored per session,
+and the client never retries indefinitely if the model remains unavailable.
 
 All conversations still share the server user, environment, CPU, memory, and
 possibly the same working tree. Two agents editing the same files can therefore
