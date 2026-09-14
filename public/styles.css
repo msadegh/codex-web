@@ -1880,18 +1880,6 @@ dialog form,
   display: none !important;
 }
 
-.thread-scope-only {
-  display: none;
-}
-
-.settings-dialog[data-scope="thread"] .thread-scope-only {
-  display: grid;
-}
-
-.settings-dialog[data-provider="claude"] .thread-scope-only {
-  display: none;
-}
-
 .checkbox-control {
   display: flex;
   min-height: 40px;

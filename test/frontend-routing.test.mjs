@@ -1154,6 +1154,8 @@ test(
     );
     const storedThreadSettings = JSON.parse(values.get("codex-web-thread-settings"));
     assert.deepEqual(storedThreadSettings[thread.id], {
+      capacityAutoContinueAttempts: 0,
+      capacityAutoContinuePrompt: "ادامه بده",
       effort: "low",
       model: "override-model",
       serviceTier: "fast",
@@ -1236,6 +1238,18 @@ test(
       if (request.method === "thread/resume") {
         return jsonResponse({ result: { thread, cwd: thread.cwd } });
       }
+      if (request.method === "thread/start") {
+        return jsonResponse({
+          result: {
+            thread: {
+              ...thread,
+              id: "new-capacity-thread",
+              name: "New capacity test",
+            },
+            cwd: thread.cwd,
+          },
+        });
+      }
       if (request.method === "turn/start") {
         starts.push(request.params);
         return jsonResponse({
@@ -1255,6 +1269,12 @@ test(
     const { window, values } = await createHarness(t, {
       fetchHandler,
       initialUrl: "http://localhost/?session=capacity-thread",
+      savedSettings: {
+        capacityAutoContinueAttempts: 2,
+        capacityAutoContinuePrompt: "پیام پیش‌فرض",
+        cwd: "/workspace",
+        provider: "codex",
+      },
       savedThreadSettings: {
         [thread.id]: {
           capacityAutoContinueAttempts: 12,
@@ -1281,11 +1301,11 @@ test(
     document.querySelector("#send-message").click();
     await waitFor(() => starts.length === 1, "initial turn was not started");
 
-    function emitCapacityFailure(turnNumber) {
+    function emitCapacityFailure(turnNumber, threadId = thread.id) {
       FakeEventSource.latest.emit("rpc", {
         method: "turn/completed",
         params: {
-          threadId: thread.id,
+          threadId,
           turn: {
             id: `capacity-turn-${turnNumber}`,
             status: "failed",
@@ -1331,13 +1351,42 @@ test(
     assert.equal(
       JSON.parse(values.get("codex-web-thread-settings"))[thread.id]
         .capacityAutoContinueAttempts,
-      undefined,
+      0,
     );
     assert.equal(
       JSON.parse(values.get("codex-web-thread-settings"))[thread.id]
         .capacityAutoContinuePrompt,
-      undefined,
+      "وضعیت را دوباره بررسی کن",
     );
+
+    document.querySelector("#new-chat").click();
+    document.querySelector("#open-settings").click();
+    assert.equal(document.querySelector("#settings-scope").value, "defaults");
+    assert.equal(document.querySelector("#capacity-auto-continue").checked, true);
+    assert.equal(document.querySelector("#capacity-auto-continue-attempts").value, "2");
+    assert.equal(
+      document.querySelector("#capacity-auto-continue-prompt").value,
+      "پیام پیش‌فرض",
+    );
+    document.querySelector("#capacity-auto-continue-attempts").value = "14";
+    document.querySelector("#capacity-auto-continue-prompt").value = "پیام جدید پیش‌فرض";
+    document.querySelector("#save-settings").click();
+    const storedDefaults = JSON.parse(values.get("codex-web-settings"));
+    assert.equal(storedDefaults.capacityAutoContinueAttempts, 14);
+    assert.equal(storedDefaults.capacityAutoContinuePrompt, "پیام جدید پیش‌فرض");
+
+    typePrompt(window, "پیام گفتگوی تازه");
+    document.querySelector("#send-message").click();
+    await waitFor(
+      () => starts.length === 14,
+      "new conversation did not start with the default capacity settings",
+    );
+    emitCapacityFailure(14, "new-capacity-thread");
+    await waitFor(
+      () => starts.length === 15,
+      "new conversation did not use the default capacity retry settings",
+    );
+    assert.equal(starts[14].input[0].text, "پیام جدید پیش‌فرض");
     await new Promise((resolve) => setTimeout(resolve, 50));
   },
 );

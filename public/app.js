@@ -301,6 +301,8 @@ const elements = {
 
 const defaultSettings = {
   approvalPolicy: "",
+  capacityAutoContinueAttempts: 0,
+  capacityAutoContinuePrompt: CAPACITY_CONTINUATION_PROMPT,
   claudePermissionMode: "acceptEdits",
   cwd: "",
   effort: "",
@@ -458,13 +460,19 @@ function normalizeCapacityAutoContinueAttempts(value) {
 }
 
 function capacityAutoContinueAttemptsForThread(threadId = state.currentThreadId) {
-  return normalizeCapacityAutoContinueAttempts(
-    threadSetting(threadId)?.capacityAutoContinueAttempts,
-  );
+  const configured = threadSetting(threadId);
+  const value =
+    threadId && hasSetting(configured, "capacityAutoContinueAttempts")
+      ? configured.capacityAutoContinueAttempts
+      : state.settings.capacityAutoContinueAttempts;
+  return normalizeCapacityAutoContinueAttempts(value);
 }
 
 function capacityAutoContinuePromptForThread(threadId = state.currentThreadId) {
-  const configured = threadSetting(threadId)?.capacityAutoContinuePrompt;
+  const configured =
+    threadId && hasSetting(threadSetting(threadId), "capacityAutoContinuePrompt")
+      ? threadSetting(threadId).capacityAutoContinuePrompt
+      : state.settings.capacityAutoContinuePrompt;
   const prompt = typeof configured === "string" ? configured.trim() : "";
   return prompt || CAPACITY_CONTINUATION_PROMPT;
 }
@@ -1997,8 +2005,8 @@ function updateSettingsUi() {
     scope === "thread" ? "تنظیمات همین گفتگو" : "پیش‌فرض کلی گفتگوها";
   elements.settingsDescription.textContent =
     scope === "thread"
-      ? "مدل، Effort و سرعت فقط برای نوبت‌های بعدی همین گفتگو تغییر می‌کنند."
-      : "این مقادیر فقط نقطهٔ شروع گفتگوهای تازه‌اند و گفتگوهای موجود را تغییر نمی‌دهند.";
+      ? "مدل، Effort، سرعت و ادامهٔ خودکار فقط برای نوبت‌های بعدی همین گفتگو تغییر می‌کنند."
+      : "این مقادیر نقطهٔ شروع گفتگوهای تازه‌اند و گفتگوهای موجود را تغییر نمی‌دهند.";
   elements.settingsScopeHelp.textContent =
     scope === "thread"
       ? "ذخیره در این بخش، پیش‌فرض کلی را دست‌نخورده نگه می‌دارد."
@@ -2013,14 +2021,18 @@ function updateSettingsUi() {
   elements.effortSelect.value = threadValues?.effort ?? state.settings.effort;
   elements.serviceTierSelect.value =
     threadValues?.serviceTier ?? state.settings.serviceTier;
+  const capacityValues = threadValues || state.settings;
+  const capacityAttempts = normalizeCapacityAutoContinueAttempts(
+    capacityValues?.capacityAutoContinueAttempts,
+  );
   elements.capacityAutoContinue.checked =
-    (threadValues?.capacityAutoContinueAttempts || 0) > 0;
+    capacityAttempts > 0;
   elements.capacityAutoContinueAttempts.value = String(
-    threadValues?.capacityAutoContinueAttempts || 1,
+    capacityAttempts || 1,
   );
   elements.capacityAutoContinueAttempts.disabled = !elements.capacityAutoContinue.checked;
   elements.capacityAutoContinuePrompt.value =
-    threadValues?.capacityAutoContinuePrompt || CAPACITY_CONTINUATION_PROMPT;
+    capacityValues?.capacityAutoContinuePrompt || CAPACITY_CONTINUATION_PROMPT;
   elements.capacityAutoContinuePrompt.disabled = !elements.capacityAutoContinue.checked;
   elements.sandboxSelect.value = state.settings.sandbox;
   elements.approvalSelect.value = state.settings.approvalPolicy;
@@ -2092,12 +2104,13 @@ function saveSettings() {
         ? { serviceTier: elements.serviceTierSelect.value }
         : {}),
     };
-    if (capacityAttempts > 0) {
+    if (provider === "codex") {
       configured.capacityAutoContinueAttempts = capacityAttempts;
-      configured.capacityAutoContinuePrompt = capacityPrompt;
-    } else if (provider === "codex" && hasSetting(existing, "capacityAutoContinueAttempts")) {
-      delete configured.capacityAutoContinueAttempts;
-      delete configured.capacityAutoContinuePrompt;
+      configured.capacityAutoContinuePrompt =
+        capacityPrompt ||
+        (typeof existing.capacityAutoContinuePrompt === "string"
+          ? existing.capacityAutoContinuePrompt
+          : CAPACITY_CONTINUATION_PROMPT);
     }
     state.threadSettings.set(state.currentThreadId, configured);
     persistThreadSettings();
@@ -2120,8 +2133,28 @@ function saveSettings() {
     return;
   }
   const provider = elements.providerSelect.value;
+  const autoContinueEnabled =
+    provider === "codex" && elements.capacityAutoContinue.checked;
+  const capacityAttempts = autoContinueEnabled
+    ? normalizeCapacityAutoContinueAttempts(elements.capacityAutoContinueAttempts.value)
+    : 0;
+  const capacityPrompt = autoContinueEnabled
+    ? elements.capacityAutoContinuePrompt.value.trim()
+    : "";
+  if (autoContinueEnabled && capacityAttempts < 1) {
+    toast("تعداد تلاش‌ها باید یک عدد صحیح مثبت باشد.", "warning");
+    return;
+  }
+  if (autoContinueEnabled && !capacityPrompt) {
+    toast("متن پیام خودکار نمی‌تواند خالی باشد.", "warning");
+    return;
+  }
   state.settings = {
     approvalPolicy: elements.approvalSelect.value,
+    capacityAutoContinueAttempts:
+      provider === "codex" ? capacityAttempts : state.settings.capacityAutoContinueAttempts,
+    capacityAutoContinuePrompt:
+      provider === "codex" ? capacityPrompt || CAPACITY_CONTINUATION_PROMPT : state.settings.capacityAutoContinuePrompt,
     claudePermissionMode: elements.claudePermissionMode.value,
     cwd,
     effort: elements.effortSelect.value,
