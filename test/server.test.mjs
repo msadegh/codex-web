@@ -122,7 +122,16 @@ test("server starts with a fake Codex bridge and enforces local security boundar
 
   const child = spawn(
     process.execPath,
-    [SERVER, "--no-open", "-p", "test", "--yolo", "--search"],
+    [
+      SERVER,
+      "--no-open",
+      "-p",
+      "test",
+      "--yolo",
+      "--search",
+      "-c",
+      "model_context_window=900000",
+    ],
     {
       cwd: temporaryRoot,
       env: {
@@ -153,7 +162,7 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   assert.equal(status.cwd, temporaryRoot);
   assert.equal(status.webVersion, packageInfo.version);
   assert.equal(status.codexVersion, "0.0.0-test");
-  assert.equal(status.providers.codex.configuredContextWindow, 872000);
+  assert.equal(status.providers.codex.configuredContextWindow, 900000);
   assert.equal(status.providers.codex.configuredAutoCompactTokenLimit, 660000);
 
   const pageResponse = await fetch(`${baseUrl}/`);
@@ -246,6 +255,7 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   assert.deepEqual(childArgs.slice(-2), ["app-server", "--stdio"]);
   assert.equal(childArgs.includes('model="test-model"'), true);
   assert.equal(childArgs.includes("model_context_window=872000"), true);
+  assert.equal(childArgs.includes("model_context_window=900000"), true);
   assert.equal(childArgs.includes("model_auto_compact_token_limit=660000"), true);
   assert.equal(childArgs.includes('model_reasoning_effort="low"'), true);
   assert.equal(childArgs.includes('web_search="live"'), true);

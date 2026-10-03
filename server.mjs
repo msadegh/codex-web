@@ -285,15 +285,16 @@ function prepareCodexArgs(args) {
 }
 
 function readNumericConfigOverride(args, key) {
+  let configuredValue = null;
   for (let index = 0; index < args.length - 1; index += 1) {
     if (args[index] !== "-c" && args[index] !== "--config") continue;
     const assignment = String(args[index + 1] || "");
     if (!assignment.startsWith(`${key}=`)) continue;
     const rawValue = assignment.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, "");
     const value = Number(rawValue);
-    return Number.isFinite(value) && value > 0 ? value : null;
+    if (Number.isFinite(value) && value > 0) configuredValue = value;
   }
-  return null;
+  return configuredValue;
 }
 
 function applyCliThreadDefaults(method, params) {
