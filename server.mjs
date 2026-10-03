@@ -72,6 +72,14 @@ const WEB_ARGS = new Set(["--no-open", "--help", "-h", "--version", "-V"]);
 const RAW_CODEX_ARGS = process.argv.slice(2).filter((arg) => !WEB_ARGS.has(arg));
 const { serverArgs: CODEX_ARGS, threadDefaults: CLI_THREAD_DEFAULTS } =
   prepareCodexArgs(RAW_CODEX_ARGS);
+const CODEX_CONFIGURED_CONTEXT_WINDOW = readNumericConfigOverride(
+  CODEX_ARGS,
+  "model_context_window",
+);
+const CODEX_CONFIGURED_AUTO_COMPACT_TOKEN_LIMIT = readNumericConfigOverride(
+  CODEX_ARGS,
+  "model_auto_compact_token_limit",
+);
 const SHOULD_OPEN = !process.argv.includes("--no-open") && process.env.CODEX_WEB_NO_OPEN !== "1";
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -274,6 +282,18 @@ function prepareCodexArgs(args) {
     }
   }
   return { serverArgs, threadDefaults };
+}
+
+function readNumericConfigOverride(args, key) {
+  for (let index = 0; index < args.length - 1; index += 1) {
+    if (args[index] !== "-c" && args[index] !== "--config") continue;
+    const assignment = String(args[index + 1] || "");
+    if (!assignment.startsWith(`${key}=`)) continue;
+    const rawValue = assignment.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, "");
+    const value = Number(rawValue);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  return null;
 }
 
 function applyCliThreadDefaults(method, params) {
@@ -1406,7 +1426,12 @@ const server = createServer(async (req, res) => {
         webVersion: PACKAGE.version,
         codexVersion: CODEX_VERSION,
         providers: {
-          codex: { ready: bridge.ready, binary: CODEX_BIN },
+          codex: {
+            ready: bridge.ready,
+            binary: CODEX_BIN,
+            configuredContextWindow: CODEX_CONFIGURED_CONTEXT_WINDOW,
+            configuredAutoCompactTokenLimit: CODEX_CONFIGURED_AUTO_COMPACT_TOKEN_LIMIT,
+          },
           claude: claudeStatus,
         },
       })}\n\n`);
@@ -1429,7 +1454,12 @@ const server = createServer(async (req, res) => {
         codexBin: CODEX_BIN,
         claudeBin: CLAUDE_BIN,
         providers: {
-          codex: { ready: bridge.ready, binary: CODEX_BIN },
+          codex: {
+            ready: bridge.ready,
+            binary: CODEX_BIN,
+            configuredContextWindow: CODEX_CONFIGURED_CONTEXT_WINDOW,
+            configuredAutoCompactTokenLimit: CODEX_CONFIGURED_AUTO_COMPACT_TOKEN_LIMIT,
+          },
           claude: claudeStatus,
         },
         cwd: DEFAULT_CWD,

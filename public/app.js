@@ -327,6 +327,10 @@ const state = {
   capacityContinuations: new Map(),
   composerModes: new Map(),
   connected: false,
+  codexContextConfig: {
+    configuredAutoCompactTokenLimit: null,
+    configuredContextWindow: null,
+  },
   currentThread: null,
   currentThreadId: null,
   currentTurnId: null,
@@ -918,13 +922,12 @@ function readableApproval(value) {
 }
 
 function contextUsageText(usage) {
-  const total = usage?.last?.totalTokens ?? usage?.total?.totalTokens;
-  const windowSize = usage?.modelContextWindow;
-  if (!Number.isFinite(total)) return "هنوز گزارش نشده";
-  const totalText = total.toLocaleString("fa-IR");
-  if (!Number.isFinite(windowSize) || windowSize <= 0) return `${totalText} توکن`;
-  const percent = Math.min(100, Math.max(0, (total / windowSize) * 100));
-  return `${totalText} از ${windowSize.toLocaleString("fa-IR")} توکن (${percent.toLocaleString(
+  const metrics = contextUsageMetrics(usage);
+  if (!metrics) {
+    const total = usage?.last?.totalTokens ?? usage?.total?.totalTokens;
+    return Number.isFinite(total) ? `${total.toLocaleString("fa-IR")} توکن` : "هنوز گزارش نشده";
+  }
+  return `${metrics.usedTokens.toLocaleString("fa-IR")} از ${metrics.windowSize.toLocaleString("fa-IR")} توکن (${metrics.percent.toLocaleString(
     "fa-IR",
     { maximumFractionDigits: 1 },
   )}٪)`;
@@ -934,7 +937,12 @@ function contextUsageMetrics(usage) {
   // `total` is cumulative for the whole session and can exceed the model window.
   // `last` is the active context size reported for the latest model request.
   const usedTokens = usage?.last?.totalTokens ?? usage?.total?.totalTokens;
-  const windowSize = usage?.modelContextWindow;
+  const reportedWindowSize = usage?.modelContextWindow;
+  const configuredWindowSize = state.codexContextConfig.configuredContextWindow;
+  const windowSize =
+    Number.isFinite(reportedWindowSize) && reportedWindowSize > 0
+      ? reportedWindowSize
+      : configuredWindowSize;
   if (
     !Number.isFinite(usedTokens) ||
     usedTokens < 0 ||
@@ -944,7 +952,15 @@ function contextUsageMetrics(usage) {
     return null;
   }
   const percent = Math.min(100, Math.max(0, (usedTokens / windowSize) * 100));
-  return { percent, usedTokens, windowSize };
+  return {
+    percent,
+    usedTokens,
+    windowSize,
+    windowSource:
+      Number.isFinite(reportedWindowSize) && reportedWindowSize > 0
+        ? "codex"
+        : "configured",
+  };
 }
 
 function compactTokenCount(value) {
@@ -985,8 +1001,16 @@ function renderContextUsage() {
   const description = `${metrics.usedTokens.toLocaleString("fa-IR")} از ${metrics.windowSize.toLocaleString(
     "fa-IR",
   )} توکن context مصرف شده (${percentText}). ${guidance}`;
-  elements.contextUsage.title = description;
-  elements.contextUsage.setAttribute("aria-label", description);
+  const configuredWindow = state.codexContextConfig.configuredContextWindow;
+  const configurationNote =
+    metrics.windowSource === "codex" &&
+    Number.isFinite(configuredWindow) &&
+    configuredWindow > 0 &&
+    configuredWindow !== metrics.windowSize
+      ? ` Codex مقدار مؤثر ${metrics.windowSize.toLocaleString("fa-IR")} را برای این اجرا گزارش کرده؛ مقدار تنظیم‌شده ${configuredWindow.toLocaleString("fa-IR")} است.`
+      : "";
+  elements.contextUsage.title = `${description}${configurationNote}`;
+  elements.contextUsage.setAttribute("aria-label", `${description}${configurationNote}`);
   elements.contextUsage.classList.remove("hidden");
 }
 
@@ -1838,6 +1862,17 @@ function applyProviderStatusPayload(data = {}) {
   if (data.providers) {
     for (const provider of ["codex", "claude"]) {
       if (data.providers[provider]) {
+        if (provider === "codex") {
+          state.codexContextConfig = {
+            ...state.codexContextConfig,
+            configuredAutoCompactTokenLimit:
+              data.providers.codex.configuredAutoCompactTokenLimit ??
+              state.codexContextConfig.configuredAutoCompactTokenLimit,
+            configuredContextWindow:
+              data.providers.codex.configuredContextWindow ??
+              state.codexContextConfig.configuredContextWindow,
+          };
+        }
         changed = setProviderStatus(provider, data.providers[provider]) || changed;
       }
     }

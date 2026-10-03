@@ -116,7 +116,7 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   await mkdir(codexHome, { recursive: true });
   await writeFile(
     profilePath,
-    'model = "test-model"\nmodel_reasoning_effort = "low"\n\n[features]\nexample = true\n',
+    'model_context_window = 872000\nmodel_auto_compact_token_limit = 660000\nmodel = "test-model"\nmodel_reasoning_effort = "low"\n\n[features]\nexample = true\n',
   );
   await chmod(FAKE_CODEX, 0o755);
 
@@ -153,6 +153,8 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   assert.equal(status.cwd, temporaryRoot);
   assert.equal(status.webVersion, packageInfo.version);
   assert.equal(status.codexVersion, "0.0.0-test");
+  assert.equal(status.providers.codex.configuredContextWindow, 872000);
+  assert.equal(status.providers.codex.configuredAutoCompactTokenLimit, 660000);
 
   const pageResponse = await fetch(`${baseUrl}/`);
   assert.equal(pageResponse.status, 200);
@@ -243,6 +245,8 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   const childArgs = JSON.parse(await readFile(argsFile, "utf8"));
   assert.deepEqual(childArgs.slice(-2), ["app-server", "--stdio"]);
   assert.equal(childArgs.includes('model="test-model"'), true);
+  assert.equal(childArgs.includes("model_context_window=872000"), true);
+  assert.equal(childArgs.includes("model_auto_compact_token_limit=660000"), true);
   assert.equal(childArgs.includes('model_reasoning_effort="low"'), true);
   assert.equal(childArgs.includes('web_search="live"'), true);
   assert.equal(childArgs.includes("features.example=true"), false);

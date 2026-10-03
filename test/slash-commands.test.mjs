@@ -207,7 +207,18 @@ test("slash commands are accessible and stay isolated from model turns", async (
 
   globalThis.fetch = async (path, options = {}) => {
     if (path === "/api/status") {
-      return jsonResponse({ ready: true, cwd: "/workspace" });
+      return jsonResponse({
+        ready: true,
+        cwd: "/workspace",
+        providers: {
+          codex: {
+            ready: true,
+            configuredContextWindow: 872_000,
+            configuredAutoCompactTokenLimit: 660_000,
+          },
+          claude: { ready: false },
+        },
+      });
     }
     if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
 
@@ -310,6 +321,22 @@ test("slash commands are accessible and stay isolated from model turns", async (
   assert.equal(contextUsage.dataset.percent, "90");
   assert.equal(contextUsage.dataset.level, "compact");
   assert.match(document.querySelector("#context-usage-percent").textContent, /کامپکت/);
+
+  // A provider may omit modelContextWindow from a usage event. The UI should
+  // use the context window configured for the running Codex Web process.
+  FakeEventSource.latest.emit("rpc", {
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-slash",
+      turnId: "turn-configured-window",
+      tokenUsage: {
+        last: { totalTokens: 87_200 },
+      },
+    },
+  });
+  assert.equal(contextUsage.dataset.percent, "10");
+  assert.equal(contextUsage.dataset.level, "normal");
+  assert.match(contextUsage.textContent, /۸۷٫۲/);
 
   const menu = document.querySelector("#slash-command-menu");
   const options = document.querySelector("#slash-command-options");
