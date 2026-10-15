@@ -58,7 +58,6 @@ const HOST = "127.0.0.1";
 const PORT = parsePort(process.env.CODEX_WEB_PORT ?? "4173");
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
-const CODEX_VERSION = readCodexVersion();
 const CLAUDE_CONFIG_DIR = resolve(
   process.env.CLAUDE_CONFIG_DIR ||
     process.env.CLAUDE_HOME ||
@@ -1425,7 +1424,7 @@ const server = createServer(async (req, res) => {
         ready: bridge.ready,
         message: bridge.ready ? "connected" : "starting",
         webVersion: PACKAGE.version,
-        codexVersion: CODEX_VERSION,
+        codexVersion: readCodexVersion(),
         providers: {
           codex: {
             ready: bridge.ready,
@@ -1451,7 +1450,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         ready: bridge.ready,
         webVersion: PACKAGE.version,
-        codexVersion: CODEX_VERSION,
+        codexVersion: readCodexVersion(),
         codexBin: CODEX_BIN,
         claudeBin: CLAUDE_BIN,
         providers: {

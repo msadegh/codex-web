@@ -165,6 +165,15 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   assert.equal(status.providers.codex.configuredContextWindow, 900000);
   assert.equal(status.providers.codex.configuredAutoCompactTokenLimit, 660000);
 
+  const fakeCodexSource = await readFile(FAKE_CODEX, "utf8");
+  try {
+    await writeFile(FAKE_CODEX, fakeCodexSource.replace("0.0.0-test", "0.0.1-test"));
+    const refreshedStatus = await (await fetch(`${baseUrl}/api/status`)).json();
+    assert.equal(refreshedStatus.codexVersion, "0.0.1-test");
+  } finally {
+    await writeFile(FAKE_CODEX, fakeCodexSource);
+  }
+
   const pageResponse = await fetch(`${baseUrl}/`);
   assert.equal(pageResponse.status, 200);
   assert.match(await pageResponse.text(), /Codex Web/);
