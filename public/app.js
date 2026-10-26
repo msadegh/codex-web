@@ -290,6 +290,7 @@ const elements = {
   threadList: $("#thread-list"),
   threadMeta: $("#thread-meta"),
   threadSearch: $("#thread-search"),
+  threadSourceFilter: $("#thread-source-filter"),
   threadTitle: $("#thread-title"),
   toasts: $("#toasts"),
   uploadStatus: $("#upload-status"),
@@ -385,6 +386,7 @@ const state = {
   threadListCursor: null,
   threadListLoading: false,
   threadListHasMore: true,
+  threadSourceFilter: "manual",
   // Bounded cache avoids rereading large transcripts when revisiting sessions.
   threadCache: new Map(),
   urlHydrationActiveKey: null,
@@ -2228,6 +2230,11 @@ function formatRelativeTime(seconds) {
   );
 }
 
+function loadThreadSourceFilter() {
+  const saved = window.localStorage.getItem("codex-web-thread-source-filter");
+  return ["manual", "worker", "all"].includes(saved) ? saved : "manual";
+}
+
 function threadDisplayTitle(thread) {
   const name = thread.name?.trim();
   if (name) return name;
@@ -2504,9 +2511,14 @@ function renderThreadList() {
     provider.textContent = thread.provider === "claude" ? "Claude" : "Codex";
     provider.title = thread.provider === "claude" ? "Claude Code CLI" : "Codex CLI";
 
+    const source = document.createElement("span");
+    source.className = `thread-source ${thread.source === "worker" ? "worker" : "manual"}`;
+    source.textContent = thread.source === "worker" ? "Worker" : "دستی";
+    source.title = thread.source === "worker" ? "ساخته‌شده توسط Worker نظم" : "ساخته‌شده از رابط Codex Web";
+
     const heading = document.createElement("span");
     heading.className = "thread-item-heading";
-    heading.append(title, provider);
+    heading.append(title, provider, source);
     const presentation = threadActivityPresentation(thread.id);
     if (presentation) {
       const activity = document.createElement("span");
@@ -2564,6 +2576,7 @@ async function refreshThreads(searchTerm = elements.threadSearch.value.trim(), {
       limit: 10,
       cursor: append ? state.threadListCursor : null,
       searchTerm: searchTerm || null,
+      source: state.threadSourceFilter,
       sortDirection: "desc",
       sortKey: "updated_at",
     });
@@ -5565,6 +5578,11 @@ elements.threadSearch.addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => refreshThreads(), 250);
 });
+elements.threadSourceFilter.addEventListener("change", () => {
+  state.threadSourceFilter = elements.threadSourceFilter.value;
+  window.localStorage.setItem("codex-web-thread-source-filter", state.threadSourceFilter);
+  void refreshThreads();
+});
 elements.openSettings.addEventListener("click", () => openSettings());
 elements.headerSettings.addEventListener("click", () => openSettings());
 elements.cwdChip.addEventListener("click", () => openSettings());
@@ -5728,6 +5746,8 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 });
 
 async function initialize() {
+  state.threadSourceFilter = loadThreadSourceFilter();
+  elements.threadSourceFilter.value = state.threadSourceFilter;
   updateSidebarUi();
   updateSettingsUi();
   updateConnection();

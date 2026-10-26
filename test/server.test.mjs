@@ -143,6 +143,7 @@ test("server starts with a fake Codex bridge and enforces local security boundar
         XDG_CACHE_HOME: cacheHome,
         FAKE_CODEX_ARGS_FILE: argsFile,
         FAKE_CODEX_MESSAGES_FILE: messagesFile,
+        FAKE_CODEX_THREAD_ID: "test-thread",
       },
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -220,6 +221,32 @@ test("server starts with a fake Codex bridge and enforces local security boundar
   });
   assert.equal(threadResponse.status, 200);
   assert.equal((await threadResponse.json()).result.thread.id, "test-thread");
+
+  const manualThreads = await fetch(`${baseUrl}/api/rpc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ method: "thread/list", params: { source: "manual" } }),
+  });
+  assert.equal(manualThreads.status, 200);
+  assert.equal((await manualThreads.json()).result.data[0].source, "manual");
+
+  const workerResume = await fetch(`${baseUrl}/api/rpc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Codex-Web-Source": "nazm-worker" },
+    body: JSON.stringify({
+      method: "thread/resume",
+      params: { threadId: "test-thread", cwd: temporaryRoot },
+    }),
+  });
+  assert.equal(workerResume.status, 200);
+  const workerThreads = await fetch(`${baseUrl}/api/rpc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ method: "thread/list", params: { source: "worker" } }),
+  });
+  assert.equal(workerThreads.status, 200);
+  const workerThreadsPayload = await workerThreads.json();
+  assert.deepEqual(workerThreadsPayload.result.data.map((thread) => thread.source), ["worker"]);
 
   const compactResponse = await fetch(`${baseUrl}/api/rpc`, {
     method: "POST",

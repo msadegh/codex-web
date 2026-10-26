@@ -64,6 +64,14 @@
           <span aria-hidden="true">⌕</span>
           <input id="thread-search" type="search" placeholder="جستجو در گفتگوها…" autocomplete="off" />
         </label>
+        <label class="thread-source-filter">
+          <span>نمایش گفتگوهای</span>
+          <select id="thread-source-filter" aria-label="فیلتر منبع گفتگوها">
+            <option value="manual" selected>دستی</option>
+            <option value="worker">Worker</option>
+            <option value="all">همه</option>
+          </select>
+        </label>
 
         <div class="thread-list" id="thread-list" aria-live="polite"></div>
 

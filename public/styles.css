@@ -270,6 +270,26 @@ body.sidebar-collapsed .menu-button {
   color: var(--muted-2);
 }
 
+.thread-source-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--muted-2);
+  font-size: 0.72rem;
+}
+
+.thread-source-filter select {
+  min-width: 92px;
+  padding: 5px 8px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+}
+
 .thread-list {
   min-height: 0;
   margin: 13px -4px 0;
@@ -401,6 +421,28 @@ body.sidebar-collapsed .menu-button {
   font-size: 0.67rem;
   line-height: 1.4;
   unicode-bidi: isolate;
+}
+
+.thread-source {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 0.67rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.thread-source.manual {
+  color: var(--muted);
+  background: rgb(154 163 151 / 0.06);
+  border-color: var(--line);
+}
+
+.thread-source.worker {
+  color: var(--accent);
+  background: rgb(124 170 92 / 0.11);
+  border-color: rgb(124 170 92 / 0.35);
 }
 
 .thread-activity {

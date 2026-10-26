@@ -2,7 +2,7 @@
 
 import { createServer } from "node:http";
 import { createReadStream, readFileSync } from "node:fs";
-import { chmod, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
@@ -104,6 +104,11 @@ const UPLOAD_DIR = resolve(
 const CLAUDE_DATA_DIR = resolve(
   process.env.CLAUDE_WEB_DATA_DIR || join(CACHE_HOME, "codex-web", "claude"),
 );
+const THREAD_METADATA_PATH = resolve(
+  process.env.CODEX_WEB_THREAD_METADATA_FILE ||
+    join(CACHE_HOME, "codex-web", "thread-metadata.json"),
+);
+const WORKER_SOURCE_HEADER = "x-codex-web-source";
 
 function readCodexVersion() {
   const result = spawnSync(CODEX_BIN, ["--version"], {
@@ -318,6 +323,65 @@ function idKey(id) {
 function interactionThreadId(request) {
   const threadId = request?.params?.threadId ?? request?.params?.conversationId;
   return typeof threadId === "string" && threadId ? threadId : null;
+}
+
+let threadMetadataPromise = null;
+let threadMetadataWrite = Promise.resolve();
+
+async function readThreadMetadata() {
+  if (!threadMetadataPromise) {
+    threadMetadataPromise = readFile(THREAD_METADATA_PATH, "utf8")
+      .then((value) => {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      })
+      .catch((error) => {
+        if (error.code === "ENOENT" || error instanceof SyntaxError) return {};
+        throw error;
+      });
+  }
+  return threadMetadataPromise;
+}
+
+async function markThreadSource(threadId, source) {
+  if (!threadId || !["manual", "worker"].includes(source)) return;
+  const metadata = await readThreadMetadata();
+  if (metadata[threadId]?.source === source) return;
+  metadata[threadId] = { source, updatedAt: Math.floor(Date.now() / 1000) };
+  threadMetadataWrite = threadMetadataWrite.then(async () => {
+    await mkdir(dirname(THREAD_METADATA_PATH), { recursive: true, mode: 0o700 });
+    const temporaryPath = `${THREAD_METADATA_PATH}.${process.pid}.tmp`;
+    await writeFile(temporaryPath, `${JSON.stringify(metadata)}\n`, { mode: 0o600 });
+    await rename(temporaryPath, THREAD_METADATA_PATH);
+  });
+  await threadMetadataWrite;
+}
+
+function inferredThreadSource(thread, metadata) {
+  const recorded = metadata?.[thread?.id]?.source;
+  if (recorded === "worker" || recorded === "manual") return recorded;
+  const cwd = String(thread?.cwd || "");
+  return cwd.includes("/.nazm-worker/") || cwd.endsWith("/.nazm-worker") ? "worker" : "manual";
+}
+
+async function decorateThreadList(result, sourceFilter = "all") {
+  const metadata = await readThreadMetadata();
+  const data = (result?.data || []).map((thread) => ({
+    ...thread,
+    source: inferredThreadSource(thread, metadata),
+  }));
+  return {
+    ...result,
+    data: sourceFilter === "worker" || sourceFilter === "manual"
+      ? data.filter((thread) => thread.source === sourceFilter)
+      : data,
+  };
+}
+
+function requestThreadSource(req) {
+  return String(req.headers[WORKER_SOURCE_HEADER] || "").trim().toLowerCase() === "nazm-worker"
+    ? "worker"
+    : "manual";
 }
 
 function json(res, status, value) {
@@ -1503,12 +1567,23 @@ const server = createServer(async (req, res) => {
       if (!RPC_ALLOWLIST.has(body.method)) {
         return json(res, 403, { error: `RPC method is not allowed: ${body.method}` });
       }
-      const params = applyCliThreadDefaults(body.method, body.params || {});
+      const requestedParams = body.params || {};
+      const sourceFilter = body.method === "thread/list" ? requestedParams.source : "all";
+      const params = applyCliThreadDefaults(body.method, requestedParams);
+      if (body.method === "thread/list") delete params.source;
       const provider = providerForRequest(body.method, params);
-      const result =
+      let result =
         body.method === "thread/list" && provider === "all"
           ? await listAllThreads(params)
           : await providerRpc(body.method, params);
+      if (body.method === "thread/list") {
+        result = await decorateThreadList(result, sourceFilter);
+      } else if (body.method === "thread/start") {
+        const threadId = result?.thread?.id || params.threadId;
+        await markThreadSource(threadId, requestThreadSource(req));
+      } else if (body.method === "thread/resume" && requestThreadSource(req) === "worker") {
+        await markThreadSource(result?.thread?.id || params.threadId, "worker");
+      }
       return json(res, 200, { result });
     }
 
