@@ -1577,7 +1577,18 @@ const server = createServer(async (req, res) => {
       const requestedParams = body.params || {};
       const sourceFilter = body.method === "thread/list" ? requestedParams.source : "all";
       const params = applyCliThreadDefaults(body.method, requestedParams);
-      if (body.method === "thread/list") delete params.source;
+      if (body.method === "thread/list") {
+        delete params.source;
+        // Source is metadata owned by Codex Web, so filtering happens after
+        // the provider list is merged. Fetch a broad page first; otherwise a
+        // recent batch of Worker sessions can hide all older manual sessions.
+        if (sourceFilter === "worker" || sourceFilter === "manual") {
+          const requestedLimit = Number(params.limit);
+          params.limit = Number.isFinite(requestedLimit)
+            ? Math.max(100, Math.min(500, requestedLimit))
+            : 100;
+        }
+      }
       const provider = providerForRequest(body.method, params);
       let result =
         body.method === "thread/list" && provider === "all"
