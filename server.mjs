@@ -361,7 +361,14 @@ function inferredThreadSource(thread, metadata) {
   const recorded = metadata?.[thread?.id]?.source;
   if (recorded === "worker" || recorded === "manual") return recorded;
   const cwd = String(thread?.cwd || "");
-  return cwd.includes("/.nazm-worker/") || cwd.endsWith("/.nazm-worker") ? "worker" : "manual";
+  const preview = String(thread?.preview || "").toLowerCase();
+  const workerPrompt =
+    preview.includes("autonomous nazm") ||
+    preview.includes("repository-discovery stage") ||
+    preview.includes("nazm task worker");
+  return cwd.includes("/.nazm-worker/") || cwd.endsWith("/.nazm-worker") || workerPrompt
+    ? "worker"
+    : "manual";
 }
 
 async function decorateThreadList(result, sourceFilter = "all") {
